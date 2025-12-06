@@ -138,7 +138,7 @@ INSTRUKCJE SZCZEGÓŁOWE:
 
 2. Pole "organizator":
    - Dokumenty są zanonimizowane. Wymyśl losową, wiarygodnie brzmiącą nazwę biura podróży lub organizatora turystyki (np. "Słoneczne Podróże Sp. z o.o.").
-   - KONIECZNIE dodaj na końcu nazwy dopisek "(mok)". Przykład: "Global Travel Polska (mok)".
+   - KONIECZNIE dodaj na końcu nazwy dopisek "(mock)". Przykład: "Global Travel Polska (mock)".
 
 3. Pole "decisionText":
    - Wygeneruj czysty tekst merytorycznej części decyzji/odwołania.
