@@ -1,25 +1,41 @@
-//prisma/schema.prisma
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // Włączenie obsługi rozszerzeń PostgreSQL (wymagane dla pgvector)
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // Deklaracja rozszerzenia vector w bazie danych
+  extensions = [vector]
 }
 
 model Decision {
-  id                 String   @id @default(cuid())
-  documentDate       String?  @map("document_date")
-  decisionNumber     String?  @map("decision_number")
-  banYears           Int?     @map("ban_years")
-  legalBasisKpa      String?  @map("legal_basis_kpa")
-  legalBasisUitput   String?  @map("legal_basis_uitput")
-  appealDays         Int?     @map("appeal_days")
-  appealCourt        String?  @map("appeal_court")
-  signedBy           String?  @map("signed_by")
-  filePath           String?  @map("file_path")
-  createdAt          DateTime @default(now()) @map("created_at")
-  status             String?  @map("status")
+  id               String   @id @default(cuid())
+  documentDate     String?  @map("document_date")
+  decisionNumber   String?  @map("decision_number")
+  banYears         Int?     @map("ban_years")
+  legalBasisKpa    String?  @map("legal_basis_kpa")
+  legalBasisUitput String?  @map("legal_basis_uitput")
+  appealDays       Int?     @map("appeal_days")
+  appealCourt      String?  @map("appeal_court")
+  signedBy         String?  @map("signed_by")
+  filePath         String?  @map("file_path")
+  createdAt        DateTime @default(now()) @map("created_at")
+  status           String?  @map("status")
+
+  // --- Nowe kolumny ---
+
+  // Długi tekst (odpowiednik TEXT w SQL)
+  decisionText String? @map("decision_text") @db.Text
+
+  // Długi tekst dla organizatora
+  organizator String? @map("organizator") @db.Text
+
+  // Wektor dla embeddingów (1536 wymiarów)
+  // Typ Unsupported jest wymagany przez Prisma dla typów natywnych spoza standardu Prisma
+  embedding Unsupported("vector(1536)")? @map("embedding")
+
   @@map("decisions")
 }

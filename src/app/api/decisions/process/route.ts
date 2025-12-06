@@ -26,6 +26,9 @@ interface DecisionData {
   signedBy: string;
   filePath: string;
   status: string;
+  // Nowe pola
+  decisionText: string;
+  organizator: string;
 }
 
 // Funkcja do wywołania API Anthropic
@@ -52,7 +55,8 @@ async function callAnthropicAPI(apiKey: string, prompt: string, model: string): 
   if (!response.ok) {
     const errorData = await response.json();
     console.error('Błąd API Anthropic:', errorData);
-    throw new Error(`API Anthropic zwróciło błąd: ${response.status}`);
+    // Rzucamy błąd z konkretną informacją z API
+    throw new Error(`API Anthropic error (${response.status}): ${JSON.stringify(errorData)}`);
   }
 
   return response.json();
@@ -101,14 +105,15 @@ export async function POST(request: NextRequest) {
       console.log('📁 Nazwa pliku:', fileName);
     }
 
-    // 2. Definicja modelu AI
-    const AI_MODEL = process.env.PREMIUM_AI_MODEL || 'claude-sonnet-4-20250514';
+    // 2. Definicja modelu AI - POPRAWNY MODEL
+    const AI_MODEL = process.env.PREMIUM_AI_MODEL || 'claude-sonnet-4-5';
 
     // 3. Utworzenie prompta dla Claude
     const prompt = `Jesteś ekspertem od analizy dokumentów prawnych. Przeanalizuj poniższy dokument odwołania od decyzji Marszałka Województwa dotyczący naruszenia przepisów o organizatorach turystyki.
 
-Wyciągnij następujące informacje i zwróć je w formacie JSON (tylko czysty JSON, bez żadnego dodatkowego tekstu):
+Wyciągnij kluczowe informacje oraz wygeneruj dodatkowe dane (fikcyjny organizator) i zwróć wszystko w formacie JSON (tylko czysty JSON, bez żadnego dodatkowego tekstu).
 
+Oczekiwany format JSON:
 {
   "documentDate": "Data dokumentu w formacie YYYY-MM-DD",
   "decisionNumber": "Numer sprawy/decyzji (np. KP-TP-III.5222.7.16.2022.EL)",
@@ -119,16 +124,29 @@ Wyciągnij następujące informacje i zwróć je w formacie JSON (tylko czysty J
   "appealCourt": "Pełna nazwa i adres organu odwoławczego (MINISTERSTWO SPORTU I TURYSTYKI + adres)",
   "signedBy": "Osoba podpisująca dokument z pełnym stanowiskiem",
   "filePath": "${fileName || 'dokument.pdf'}",
-  "status": "nowy"
+  "status": "nowy",
+  "organizator": "Fikcyjna Nazwa Biura Podróży (mock)",
+  "decisionText": "Treść decyzji do embeddingu"
 }
 
-INSTRUKCJE:
-- Zawsze ustawiaj "appealDays" na 30
-- Zawsze ustawiaj "status" na "nowy"
-- "banYears" to liczba lat zakazu (zazwyczaj 3)
-- Dokładnie przepisz numery decyzji i podstawy prawne
-- Data powinna być w formacie YYYY-MM-DD
-- Zwróć TYLKO JSON, bez żadnego dodatkowego tekstu przed ani po
+INSTRUKCJE SZCZEGÓŁOWE:
+1. Dane podstawowe:
+   - "appealDays": zawsze 30
+   - "status": zawsze "nowy"
+   - "banYears": zazwyczaj 3 (sprawdź w tekście)
+   - Data: format YYYY-MM-DD
+
+2. Pole "organizator":
+   - Dokumenty są zanonimizowane. Wymyśl losową, wiarygodnie brzmiącą nazwę biura podróży lub organizatora turystyki (np. "Słoneczne Podróże Sp. z o.o.").
+   - KONIECZNIE dodaj na końcu nazwy dopisek "(mok)". Przykład: "Global Travel Polska (mok)".
+
+3. Pole "decisionText":
+   - Wygeneruj czysty tekst merytorycznej części decyzji/odwołania.
+   - Usuń nagłówki techniczne, stopki, daty i sygnatury z początku dokumentu.
+   - Tekst ma być ciągły i czytelny, przygotowany do wektoryzacji (embeddingu).
+
+4. Format:
+   - Zwróć TYLKO poprawny obiekt JSON. Nie dodawaj "Oto wynik:" ani bloków markdown, jeśli nie musisz.
 
 DOKUMENT DO ANALIZY:
 
@@ -154,7 +172,7 @@ ${documentText}`;
 
     if (apiResponse.content && apiResponse.content.length > 0) {
       const responseText = apiResponse.content[0].text;
-      console.log('📋 Surowa odpowiedź AI:', responseText.substring(0, 200) + '...');
+      console.log('📋 Surowa odpowiedź AI (fragment):', responseText.substring(0, 100) + '...');
       decisionData = parseJSONFromResponse(responseText);
       console.log('✅ Pomyślnie sparsowano odpowiedź JSON');
     } else {
@@ -164,6 +182,8 @@ ${documentText}`;
 
     // 7. Zapisanie do bazy danych
     console.log('💾 Zapisywanie do bazy danych...');
+
+    // Pole 'embedding' w bazie danych pozostaje puste/null.
     const decision = await prisma.decision.create({
       data: {
         documentDate: decisionData.documentDate,
@@ -175,7 +195,10 @@ ${documentText}`;
         appealCourt: decisionData.appealCourt,
         signedBy: decisionData.signedBy,
         filePath: decisionData.filePath,
-        status: decisionData.status
+        status: decisionData.status,
+        // Nowe pola
+        decisionText: decisionData.decisionText,
+        organizator: decisionData.organizator
       }
     });
 
@@ -195,15 +218,16 @@ ${documentText}`;
 
     // Rozróżnienie typów błędów
     if (error instanceof Error) {
+      // Obsługa błędów API
       if (error.message.includes('API Anthropic')) {
         return NextResponse.json({
-          error: 'Błąd komunikacji z usługą AI. Spróbuj ponownie za chwilę.'
+          error: `Błąd API AI: ${error.message}`
         }, { status: 503 });
       }
 
       if (error.message.includes('JSON')) {
         return NextResponse.json({
-          error: 'Błąd przetwarzania odpowiedzi AI. Skontaktuj się z administratorem.'
+          error: 'Błąd przetwarzania odpowiedzi AI (niepoprawny JSON).'
         }, { status: 500 });
       }
 
@@ -226,12 +250,8 @@ export async function GET() {
       method: 'POST',
       contentType: 'application/json',
       body: {
-        documentText: 'string (wymagane) - Pełny tekst dokumentu',
-        fileName: 'string (opcjonalne) - Nazwa pliku źródłowego'
-      },
-      example: {
-        documentText: 'Warszawa, 14 sierpnia 2023 r. ...',
-        fileName: 'odwolanie.pdf'
+        documentText: 'string (wymagane)',
+        fileName: 'string (opcjonalne)'
       }
     }
   });
