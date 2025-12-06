@@ -386,6 +386,11 @@ interface HeaderProps { currentLang: 'pl'; langReady: boolean; }
 const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
   const { isMobileMenuOpen, setIsMobileMenuOpen } = useLayout();
   const router = useRouter();
+
+  // 1. Sprawdzamy czy jesteśmy na stronie symulatora
+  const pathname = usePathname();
+  const isEzdPage = pathname?.includes('/dashboard/ezd');
+
   const [isMobile, setIsMobile] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const [isScreenSizeDetected, setIsScreenSizeDetected] = useState(false);
@@ -411,7 +416,12 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
             </div>
           </button>
         )}
-        <div className="mr-4 cursor-pointer" onClick={() => router.push('/dashboard')}>
+
+        {/* LOGO: Jeśli isEzdPage, blokujemy onClick i zmieniamy kursor */}
+        <div
+          className={`mr-4 ${isEzdPage ? 'cursor-default' : 'cursor-pointer'}`}
+          onClick={() => !isEzdPage && router.push('/dashboard')}
+        >
           <div className="flex items-center">
             <div className="h-12 w-auto bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-center px-3 py-2">
               <img src="/logo.webp" alt="Logo" className="h-full w-auto object-contain" />
@@ -419,6 +429,7 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
           </div>
         </div>
       </div>
+
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[100]">
          <div className="hidden md:block border-b-2 border-red-600 pb-0.5 bg-white/90 px-24 text-center">
             <span className="font-normal text-gray-600 mr-1">
@@ -431,24 +442,41 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
       </div>
       <div className="flex-1"></div>
       <div className="flex items-center space-x-4">
+
         <Link
           href="/dashboard/ezd"
           target="_blank"
           rel="noopener noreferrer"
-          className="hidden md:block px-4 py-2 bg-gray-50 hover:bg-gray-100 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer hover:scale-105"
+          // Tutaj też blokujemy wizualnie interakcję jeśli już jesteśmy na EZD
+          className={`hidden md:block px-4 py-2 bg-gray-50 rounded-xl border border-gray-200 shadow-sm transition-all font-['Poppins'] text-sm font-medium text-gray-800
+            ${isEzdPage ? 'cursor-default' : 'hover:bg-gray-100 hover:shadow-md cursor-pointer hover:scale-105'}`
+          }
+          onClick={(e) => isEzdPage && e.preventDefault()}
         >
-           <span className="text-sm font-medium text-gray-800 font-['Poppins']">
-             Symulator EZD
-           </span>
+           Symulator EZD
         </Link>
+
         {isClient && (
-          <a href="https://www.linkedin.com/in/move37th/" target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer hover:scale-105">
-            <div className="flex items-center gap-2 font-['Poppins']">
-              <span className="text-sm font-medium text-gray-800">Marcin Lisiak</span>
-              <span className="text-gray-300">|</span>
-              <span className="text-sm text-gray-500">move37th.ai</span>
+          // LINKEDIN: Zmieniamy tag <a> na <div> jeśli isEzdPage
+          !isEzdPage ? (
+            // Wersja AKTYWNA (Link)
+            <a href="https://www.linkedin.com/in/move37th/" target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer hover:scale-105">
+              <div className="flex items-center gap-2 font-['Poppins']">
+                <span className="text-sm font-medium text-gray-800">Marcin Lisiak</span>
+                <span className="text-gray-300">|</span>
+                <span className="text-sm text-gray-500">move37th.ai</span>
+              </div>
+            </a>
+          ) : (
+            // Wersja NIEAKTYWNA (Div) - te same kolory, brak linku
+            <div className="px-4 py-2 bg-white rounded-xl border border-gray-200 shadow-sm cursor-default">
+              <div className="flex items-center gap-2 font-['Poppins']">
+                <span className="text-sm font-medium text-gray-800">Marcin Lisiak</span>
+                <span className="text-gray-300">|</span>
+                <span className="text-sm text-gray-500">move37th.ai</span>
+              </div>
             </div>
-          </a>
+          )
         )}
       </div>
     </header>
