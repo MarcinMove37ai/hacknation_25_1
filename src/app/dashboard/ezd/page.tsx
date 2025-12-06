@@ -1,12 +1,14 @@
 "use client";
 
 import React, { useState, useRef } from 'react';
-import { FileText, CheckCircle, X, Loader2, HardDrive, CloudUpload, ArrowRight, Clock } from 'lucide-react';
+import { FileText, CheckCircle, X, Loader2, HardDrive, CloudUpload, ArrowRight, AlertCircle } from 'lucide-react';
 
 export default function EzdSimulatorPage() {
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
-  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success'>('idle');
+  // Dodano stan 'error' do obsługi błędów z API
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Obsługa przeciągania
@@ -28,6 +30,7 @@ export default function EzdSimulatorPage() {
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       setFile(e.dataTransfer.files[0]);
       setUploadStatus('idle');
+      setErrorMessage('');
     }
   };
 
@@ -37,23 +40,49 @@ export default function EzdSimulatorPage() {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
       setUploadStatus('idle');
+      setErrorMessage('');
     }
   };
 
-  // Symulacja procesu
-  const handleUpload = () => {
+  // --- LOGIKA INTEGRACJI Z API ---
+  const handleUpload = async () => {
     if (!file) return;
     setUploadStatus('uploading');
+    setErrorMessage('');
 
-    // Symulacja procesu (2 sekundy)
-    setTimeout(() => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      // UWAGA: Upewnij się, że Twój route.ts jest w folderze app/api/upload/route.ts
+      // Jeśli jest w innym miejscu, zmień poniższą ścieżkę.
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Wystąpił błąd podczas przesyłania');
+      }
+
       setUploadStatus('success');
-    }, 2000);
+      console.log('Plik przesłany:', data);
+      if (data.ocr && !data.ocr.error) {
+        console.log('Tekst OCR:', data.ocr.text);
+      }
+    } catch (error) {
+      console.error('Błąd uploadu:', error);
+      setUploadStatus('error');
+      setErrorMessage(error instanceof Error ? error.message : 'Nieznany błąd połączenia');
+    }
   };
 
   const removeFile = () => {
     setFile(null);
     setUploadStatus('idle');
+    setErrorMessage('');
     if (inputRef.current) {
       inputRef.current.value = '';
     }
@@ -64,10 +93,9 @@ export default function EzdSimulatorPage() {
   };
 
   return (
-    // ZMIANA: justify-center -> justify-start oraz dodane pt-10 (przesunięcie w górę)
     <div className="min-h-full flex flex-col items-center justify-start pt-10 md:pt-16 bg-gray-50/50 p-6 font-sans animate-in fade-in duration-500">
 
-      {/* --- Karta Główna (Szeroka) --- */}
+      {/* --- Karta Główna --- */}
       <div className="w-full max-w-4xl bg-white rounded-3xl shadow-xl border border-gray-100 overflow-hidden">
 
         {/* Nagłówek Karty */}
@@ -120,9 +148,11 @@ export default function EzdSimulatorPage() {
                 rounded-[2rem] border-[3px] border-dashed transition-all duration-300 ease-out cursor-pointer group overflow-hidden
                 ${dragActive
                   ? 'border-red-500 bg-red-50/40 scale-[1.01] shadow-inner'
-                  : file
-                    ? 'border-blue-300 bg-blue-50/20'
-                    : 'border-gray-200 bg-gray-50 hover:bg-gray-100 hover:border-gray-300'
+                  : uploadStatus === 'error'
+                    ? 'border-red-300 bg-red-50/10' // Styl dla błędu
+                    : file
+                      ? 'border-blue-300 bg-blue-50/20'
+                      : 'border-gray-200 bg-gray-50 hover:bg-gray-100 hover:border-gray-300'
                 }
               `}
               onDragEnter={handleDrag}
@@ -140,26 +170,35 @@ export default function EzdSimulatorPage() {
               />
 
               {file ? (
-                // Widok wybranego pliku (Z POPRAWKĄ ZAWIJANIA TEKSTU)
+                // Widok wybranego pliku
                 <div className="flex flex-row items-center justify-between w-full animate-in slide-in-from-left-2 duration-300 z-10">
-                  <div className="flex items-center gap-6 min-w-0 flex-1"> {/* Dodano min-w-0 i flex-1 */}
+                  <div className="flex items-center gap-6 min-w-0 flex-1">
 
                     <div className="w-16 h-16 bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center justify-center text-blue-600 flex-shrink-0">
                       <FileText size={32} strokeWidth={1.5} />
                     </div>
 
-                    <div className="min-w-0 flex-1 pr-4"> {/* Kontener tekstu z flex-1 */}
-                      <p className="text-gray-900 font-bold text-lg break-words text-left leading-tight"> {/* break-words zawija tekst */}
+                    <div className="min-w-0 flex-1 pr-4">
+                      <p className="text-gray-900 font-bold text-lg break-words text-left leading-tight">
                         {file.name}
                       </p>
-                      <p className="text-gray-500 font-medium text-sm text-left mt-1">
-                        Gotowy do wysłania • {(file.size / 1024).toFixed(2)} KB
-                      </p>
+
+                      {/* Wyświetlanie błędu lub info o pliku */}
+                      {uploadStatus === 'error' ? (
+                        <p className="text-red-500 font-medium text-sm text-left mt-1 flex items-center gap-1">
+                          <AlertCircle size={14} />
+                          {errorMessage || 'Błąd przesyłania'}
+                        </p>
+                      ) : (
+                        <p className="text-gray-500 font-medium text-sm text-left mt-1">
+                          Gotowy do wysłania • {(file.size / 1024).toFixed(2)} KB
+                        </p>
+                      )}
                     </div>
 
                   </div>
 
-                  {uploadStatus === 'idle' && (
+                  {uploadStatus !== 'uploading' && (
                      <button
                        onClick={(e) => { e.stopPropagation(); removeFile(); }}
                        className="p-3 bg-white border border-red-100 text-red-600 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all shadow-sm group/btn flex-shrink-0"
@@ -171,16 +210,12 @@ export default function EzdSimulatorPage() {
               ) : (
                 // Widok domyślny (pusty)
                 <div className="flex flex-row items-center gap-8 w-full pointer-events-none z-10">
-
-                  {/* Ikona */}
                   <div className={`
                     w-20 h-20 rounded-full flex items-center justify-center flex-shrink-0 transition-all duration-300 shadow-sm border
                     ${dragActive ? 'bg-white text-red-600 border-red-100' : 'bg-white text-gray-400 border-gray-100 group-hover:scale-105 group-hover:text-red-500'}
                   `}>
                     <CloudUpload size={32} strokeWidth={2} />
                   </div>
-
-                  {/* Teksty */}
                   <div className="flex flex-col items-start text-left space-y-1">
                     <p className="text-gray-800 font-bold text-xl group-hover:text-red-600 transition-colors">
                       Przeciągnij i upuść plik tutaj
@@ -192,7 +227,6 @@ export default function EzdSimulatorPage() {
                       <span className="bg-white border border-gray-200 px-2 py-0.5 rounded text-[10px] text-gray-400 font-mono">PDF, DOCX</span>
                     </div>
                   </div>
-
                   <div className="ml-auto text-gray-300 group-hover:text-red-400 transition-colors">
                      <ArrowRight size={24} />
                   </div>
@@ -211,7 +245,7 @@ export default function EzdSimulatorPage() {
                 <div>
                   <h3 className="text-xl font-bold text-gray-800">Przesłano pomyślnie!</h3>
                   <p className="text-gray-600 text-sm mt-1">
-                    Plik <span className="font-semibold text-gray-900">{file?.name}</span> został dodany do kolejki.
+                    Plik <span className="font-semibold text-gray-900">{file?.name}</span> został zapisany na serwerze.
                   </p>
                 </div>
               </div>
@@ -234,14 +268,13 @@ export default function EzdSimulatorPage() {
                 className={`
                   relative w-full py-5 rounded-2xl font-bold text-white shadow-xl transition-all duration-300 flex items-center justify-center gap-3 text-lg
                   ${!file
-                    ? 'bg-gray-800 text-gray-400 cursor-not-allowed border border-gray-700 shadow-none' // ZMIANA: Ciemny szary styl gdy brak pliku
+                    ? 'bg-gray-800 text-gray-400 cursor-not-allowed border border-gray-700 shadow-none'
                     : uploadStatus === 'uploading'
-                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none border border-gray-200'
-                      : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 hover:shadow-red-200/50 hover:-translate-y-0.5 active:translate-y-0'
+                          ? 'bg-gradient-to-r from-orange-500 to-red-600 cursor-wait shadow-lg'
+                          : 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 hover:shadow-red-200/50 hover:-translate-y-0.5 active:translate-y-0'
                   }
                 `}
               >
-                {/* ZMIANA: Logika wyświetlania tekstu */}
                 {!file ? (
                    <>
                      <span>Oczekuję na plik</span>
@@ -249,7 +282,12 @@ export default function EzdSimulatorPage() {
                 ) : uploadStatus === 'uploading' ? (
                   <>
                     <Loader2 size={24} className="animate-spin" />
-                    <span>Przetwarzanie dokumentu...</span>
+                    <span>Wysyłanie na serwer...</span>
+                  </>
+                ) : uploadStatus === 'error' ? (
+                  <>
+                     <span>Spróbuj ponownie</span>
+                     <ArrowRight size={20} />
                   </>
                 ) : (
                   <>

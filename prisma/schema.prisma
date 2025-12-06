@@ -20,6 +20,6 @@ model Decision {
   signedBy           String?  @map("signed_by")
   filePath           String?  @map("file_path")
   createdAt          DateTime @default(now()) @map("created_at")
-
+  status             String?  @map("status")
   @@map("decisions")
 }

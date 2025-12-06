@@ -58,7 +58,45 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
     await writeFile(filePath, buffer);
 
-    // Zwrócenie informacji o zapisanym pliku
+    // Wysłanie pliku do Python OCR API (tylko dla PDF)
+    let ocrResult = null;
+    if (file.type === 'application/pdf') {
+      try {
+        // URL do Python OCR API - ustaw w zmiennych środowiskowych Railway
+        const pythonApiUrl = process.env.PYTHON_OCR_API_URL || 'http://localhost:8000';
+
+        // Utworzenie FormData z plikiem
+        const ocrFormData = new FormData();
+        const fileBlob = new Blob([buffer], { type: file.type });
+        ocrFormData.append('file', fileBlob, file.name);
+
+        console.log(`Wysyłanie pliku do OCR API: ${pythonApiUrl}/ocr`);
+
+        // Wysłanie do Python API
+        const ocrResponse = await fetch(`${pythonApiUrl}/ocr`, {
+          method: 'POST',
+          body: ocrFormData,
+        });
+
+        if (ocrResponse.ok) {
+          ocrResult = await ocrResponse.json();
+          console.log('✅ OCR zakończone pomyślnie');
+          console.log('📄 Rozpoznany tekst:', ocrResult.text);
+        } else {
+          const errorText = await ocrResponse.text();
+          console.error('❌ Błąd OCR:', errorText);
+          ocrResult = { error: errorText };
+        }
+      } catch (ocrError) {
+        console.error('❌ Nie udało się połączyć z OCR API:', ocrError);
+        ocrResult = {
+          error: 'Nie udało się połączyć z OCR API',
+          details: ocrError instanceof Error ? ocrError.message : 'Nieznany błąd'
+        };
+      }
+    }
+
+    // Zwrócenie informacji o zapisanym pliku + wyniki OCR
     return NextResponse.json({
       success: true,
       message: 'Plik został pomyślnie przesłany',
@@ -69,7 +107,8 @@ export async function POST(request: NextRequest) {
         type: file.type,
         path: filePath,
         uploadedAt: new Date().toISOString()
-      }
+      },
+      ocr: ocrResult // Wyniki OCR jeśli PDF (null dla innych typów)
     }, { status: 200 });
 
   } catch (error) {
