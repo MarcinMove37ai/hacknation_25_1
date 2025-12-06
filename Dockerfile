@@ -1,4 +1,3 @@
-# Dockerfile
 # Etap 1: Budowanie aplikacji
 FROM node:24-slim AS builder
 
@@ -7,18 +6,23 @@ WORKDIR /app
 # Kopiowanie plików package
 COPY package.json package-lock.json ./
 
-# Instalacja zależności
+# Instalacja zależności (w tym devDependencies potrzebnych do budowania i Prismy)
 RUN npm ci
 
-# Kopiowanie kodu aplikacji
+# Kopiowanie kodu aplikacji (w tym folderu prisma/ i pliku schema.prisma)
 COPY . .
 
 # Wyłączenie telemetrii Next.js
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Ustawienie DATABASE_URL dla etapu budowania (można nadpisać przez --build-arg)
+# Ustawienie DATABASE_URL (wymagane, aby prisma generate zadziałało, jeśli waliduje połączenie, choć zazwyczaj wystarczy sama obecność zmiennej)
 ARG DATABASE_URL=postgresql://dummy:dummy@localhost:5432/dummy
 ENV DATABASE_URL=$DATABASE_URL
+
+# --- KLUCZOWA ZMIANA ---
+# Generowanie klienta Prisma PRZED buildem
+RUN npx prisma generate
+# -----------------------
 
 # Budowanie aplikacji
 RUN npm run build
@@ -36,6 +40,15 @@ COPY --from=builder /app/package*.json ./
 
 # Instalacja tylko zależności produkcyjnych
 RUN npm ci --omit=dev
+
+# --- KLUCZOWA ZMIANA 2 ---
+# Kopiowanie wygenerowanego klienta Prisma z etapu budowania
+# Dzięki temu aplikacja produkcyjna ma dostęp do bazy danych
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
+# Kopiujemy też folder prisma (opcjonalnie, przydatne do migracji)
+COPY --from=builder /app/prisma ./prisma
+# -------------------------
 
 # Kopiowanie zbudowanej aplikacji
 COPY --from=builder /app/.next ./.next
