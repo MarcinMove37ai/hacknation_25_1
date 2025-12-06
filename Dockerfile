@@ -16,6 +16,10 @@ COPY . .
 # Wyłączenie telemetrii Next.js
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# Ustawienie DATABASE_URL dla etapu budowania (można nadpisać przez --build-arg)
+ARG DATABASE_URL=postgresql://dummy:dummy@localhost:5432/dummy
+ENV DATABASE_URL=$DATABASE_URL
+
 # Budowanie aplikacji
 RUN npm run build
 

@@ -1,14 +1,25 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
+//prisma/schema.prisma
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Decision {
+  id                 String   @id @default(cuid())
+  documentDate       String?  @map("document_date")
+  decisionNumber     String?  @map("decision_number")
+  banYears           Int?     @map("ban_years")
+  legalBasisKpa      String?  @map("legal_basis_kpa")
+  legalBasisUitput   String?  @map("legal_basis_uitput")
+  appealDays         Int?     @map("appeal_days")
+  appealCourt        String?  @map("appeal_court")
+  signedBy           String?  @map("signed_by")
+  filePath           String?  @map("file_path")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@map("decisions")
 }

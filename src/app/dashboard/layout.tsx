@@ -13,11 +13,13 @@ import {
   Wallet,
   UserX,
   Lock,
-  ArrowRight
+  ArrowRight,
+  FileText,
+  Library,
+  Bot,
+  ChevronDown,
+  ChevronRight
 } from 'lucide-react';
-
-// --- (Reszta komponentów bez zmian: CustomIconProps, ikony, translations, Context, Provider, useLayout, renderMenuIcon, getMenuItems) ---
-// Dla czytelności wklejam kluczowe komponenty pomocnicze, aby plik był kompletny
 
 // Custom Icon Components
 interface CustomIconProps {
@@ -63,26 +65,79 @@ const LinkedInIcon: React.FC<CustomIconProps> = ({ size = 20, className = '', is
 };
 
 // Menu items configuration
+interface SubMenuItem {
+  label: string;
+  path: string;
+  count?: number;
+}
+
 interface MenuItem {
   IconComponent: LucideIcon | React.FC<CustomIconProps>;
   label: string;
   path: string;
   fullWidth?: boolean;
   iconType?: 'instagram' | 'linkedin';
+  subItems?: SubMenuItem[];
 }
 
 const getMenuItems = (lang: 'pl'): MenuItem[] => [
   { IconComponent: Home, label: 'Dashboard', path: '/dashboard', fullWidth: true },
-  { IconComponent: Scale, label: 'Ścieżka prawna', path: '/dashboard/sciezka-prawna' },
-  { IconComponent: Wallet, label: 'Zgrabny budżet', path: '/dashboard/zgrabny-budzet' },
-  { IconComponent: UserX, label: 'Dane bez twarzy', path: '/dashboard/dane-bez-twarzy' }
+  {
+    IconComponent: FileText,
+    label: 'Postępowania (EZD)',
+    path: '/dashboard/cases',
+    subItems: [
+      { label: 'Wszystkie', path: '/dashboard/cases', count: 152 },
+      { label: 'W toku', path: '/dashboard/cases?status=in_progress', count: 45 },
+      { label: 'Do wyjaśnienia', path: '/dashboard/cases?status=pending', count: 12 },
+      { label: 'Zakończone', path: '/dashboard/cases?status=closed', count: 95 }
+    ]
+  },
+  {
+    IconComponent: Library,
+    label: 'Baza decyzji',
+    path: '/dashboard/decision',
+    subItems: [
+      { label: 'Czatuj', path: '/dashboard/decision?mode=chat' },
+      { label: 'Przeglądaj', path: '/dashboard/decision?mode=browse' }
+    ]
+  },
+  {
+    IconComponent: Bot,
+    label: 'Czat z Ustawą oITiPUT',
+    path: '/dashboard/uoitiput',
+    subItems: [
+      { label: 'Czatuj', path: '/dashboard/uoitiput?mode=chat' },
+      { label: 'Przeglądaj', path: '/dashboard/uoitiput?mode=browse' }
+    ]
+  },
+  {
+    IconComponent: Bot,
+    label: 'Czat z KPA',
+    path: '/dashboard/kpa',
+    subItems: [
+      { label: 'Czatuj', path: '/dashboard/kpa?mode=chat' },
+      { label: 'Przeglądaj', path: '/dashboard/kpa?mode=browse' }
+    ]
+  }
 ];
 
 const getCurrentPageLabel = (path: string | null, lang: 'pl' = 'pl') => {
   if (!path) return 'Dashboard';
-  const normalizedPath = path.endsWith('/') ? path.slice(0, -1) : path;
+
+  // --- NOWY KOD: Wyjątek dla etykiety Symulatora ---
+  if (path.includes('/dashboard/ezd')) {
+    return 'Symulator EZD PUW';
+  }
+  // ------------------------------------------------
+
   const menuItems = getMenuItems(lang);
-  const menuItem = menuItems.find(item => normalizedPath === item.path);
+  let menuItem = menuItems.find(item => path.split('?')[0] === item.path);
+
+  if (!menuItem) {
+    menuItem = menuItems.find(item => item.subItems?.some(sub => sub.path.split('?')[0] === path.split('?')[0]));
+  }
+
   return menuItem?.label || 'Dashboard';
 };
 
@@ -147,9 +202,24 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
   const [isMobile, setIsMobile] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const [isScreenSizeDetected, setIsScreenSizeDetected] = useState(false);
+
+  const [expandedMenus, setExpandedMenus] = useState<string[]>([]);
+
   const normalizedPathname = pathname?.endsWith('/') ? pathname.slice(0, -1) : pathname;
 
   useEffect(() => setIsClient(true), []);
+
+  useEffect(() => {
+    if (pathname) {
+      const activeParent = menuItems.find(item =>
+        item.path === pathname || item.subItems?.some(sub => pathname.startsWith(sub.path.split('?')[0]))
+      );
+      if (activeParent && activeParent.subItems && !expandedMenus.includes(activeParent.path)) {
+        setExpandedMenus(prev => [...prev, activeParent.path]);
+      }
+    }
+  }, [pathname]);
+
   useEffect(() => {
     const handleResize = () => {
       const newIsMobile = window.innerWidth < 768;
@@ -168,25 +238,125 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
     setTimeout(() => setIsNavigating(false), 500);
   };
 
+  const toggleMenu = (path: string) => {
+    setExpandedMenus(prev =>
+      prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path]
+    );
+  };
+
+  const renderMenuItem = (item: MenuItem, index: number, isMobileRender: boolean) => {
+    const isActive = !!(normalizedPathname === item.path || item.subItems?.some(sub => normalizedPathname === sub.path.split('?')[0]));
+    const hasSubItems = item.subItems && item.subItems.length > 0;
+    const isExpanded = expandedMenus.includes(item.path);
+    const showExpandedContent = isExpanded && (isMobileRender || hoveredSidebar);
+
+    // Wspólna zawartość dla Linku i Diva
+    const menuItemContent = (
+      <>
+        <div className={`flex-shrink-0 w-6 h-6 flex items-center justify-center transition-all duration-200 ${isActive ? 'text-blue-600 scale-110' : 'text-gray-600 group-hover/link:text-gray-700 group-hover/link:scale-105'}`}>
+          {renderMenuIcon(item, isActive, 20)}
+        </div>
+
+        <span className={`ml-4 whitespace-nowrap font-medium overflow-hidden transition-all duration-300 ease-out flex-1 flex items-center justify-between
+          ${(hoveredSidebar || isMobileRender) ? 'opacity-100 translate-x-0 w-auto' : 'opacity-0 translate-x-2 w-0'}`}>
+          {item.label}
+          {hasSubItems && (
+            <span className="ml-2 text-gray-400">
+              {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            </span>
+          )}
+        </span>
+      </>
+    );
+
+    // Klasy CSS dla głównego elementu
+    const commonClasses = `relative flex items-center min-h-[48px] px-3 group/link rounded-xl transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 cursor-pointer
+      ${isActive && !hasSubItems ? 'bg-gradient-to-r from-blue-50 to-blue-100 text-blue-700 shadow-sm border border-blue-200' : 'border border-transparent hover:bg-gray-50 text-gray-700 hover:shadow-sm hover:scale-[1.02]'}
+    `;
+
+    return (
+      <li key={item.path} className="mb-1" style={{ transitionDelay: isMobileRender ? `${index * 50}ms` : '0ms' }}>
+        <div className="relative group">
+
+          {/* LOGIKA: Jeśli są podkategorie -> DIV (Tylko rozwijanie). Jeśli nie -> LINK (Nawigacja) */}
+          {hasSubItems ? (
+            <div
+              onClick={() => toggleMenu(item.path)}
+              className={commonClasses}
+            >
+              {menuItemContent}
+            </div>
+          ) : (
+            <Link
+              href={item.path}
+              onClick={handleNavigation}
+              className={commonClasses}
+            >
+              {menuItemContent}
+            </Link>
+          )}
+
+          {/* Podmenu (Subitems) */}
+          {hasSubItems && (
+            <div className={`overflow-hidden transition-all duration-300 ease-in-out bg-white ${(showExpandedContent) ? 'max-h-96 opacity-100 mt-1' : 'max-h-0 opacity-0'}`}>
+              <ul className="space-y-1 pt-1 pb-2">
+                {item.subItems!.map((subItem) => {
+                   const isSubActive = pathname === subItem.path.split('?')[0] && (
+                     subItem.path.includes('?')
+                       ? window.location.search.includes(subItem.path.split('?')[1])
+                       : window.location.search === ''
+                   );
+
+                   return (
+                    <li key={subItem.path}>
+                      <Link
+                        href={subItem.path}
+                        onClick={handleNavigation}
+                        className={`flex items-center justify-between h-9 pl-12 pr-3 text-sm rounded-lg transition-colors
+                          ${isSubActive ? 'text-blue-700 bg-blue-50 font-medium' : 'text-gray-500 hover:text-blue-600 hover:bg-gray-50'}
+                        `}
+                      >
+                        <span className="truncate">{subItem.label}</span>
+                        {subItem.count !== undefined && (
+                          <span className={`
+                            ml-2 px-2 py-0.5 text-[10px] font-bold rounded-full border
+                            ${subItem.count > 0
+                              ? 'bg-blue-100 text-blue-600 border-blue-200'
+                              : 'bg-gray-100 text-gray-400 border-gray-200'}
+                          `}>
+                            {subItem.count}
+                          </span>
+                        )}
+                      </Link>
+                    </li>
+                   );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {/* Tooltip dla zwiniętego paska (tylko desktop) */}
+          {!hoveredSidebar && !isMobileRender && (
+            <div className="absolute left-full top-1/2 transform -translate-y-1/2 ml-2 px-2 py-1 bg-gray-900 text-white text-sm rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+              {item.label}
+              <div className="absolute left-0 top-1/2 transform -translate-y-1/2 -translate-x-1 w-2 h-2 bg-gray-900 rotate-45"></div>
+            </div>
+          )}
+        </div>
+      </li>
+    );
+  };
+
   if (!isScreenSizeDetected) return null;
 
   if (isMobile) {
     if (!isClient) return null;
     return (
-      <div className={`fixed left-0 z-50 top-16 bottom-1 w-58 bg-white/95 backdrop-blur-xl backdrop-saturate-150 shadow-2xl rounded-r-3xl transition-all duration-300 ease-out overflow-y-auto border-r border-gray-100 ${isMobileMenuOpen ? 'transform translate-x-0' : 'transform -translate-x-full'}`} style={{ boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }}>
+      <div className={`fixed left-0 z-50 top-16 bottom-1 w-72 bg-white/95 backdrop-blur-xl backdrop-saturate-150 shadow-2xl rounded-r-3xl transition-all duration-300 ease-out overflow-y-auto border-r border-gray-100 ${isMobileMenuOpen ? 'transform translate-x-0' : 'transform -translate-x-full'}`} style={{ boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }}>
         <div className="flex flex-col h-full">
-          <nav className="flex-1 py-6 overflow-y-auto">
+          <nav className="flex-1 py-6">
             <ul className="space-y-2 px-4">
-              {menuItems.map((item, index) => (
-                <li key={item.path} className={`transition-all duration-300 ${isMobileMenuOpen ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`} style={{ transitionDelay: `${index * 50}ms` }}>
-                  <Link href={item.path} onClick={handleNavigation} className={`flex items-center h-14 px-4 rounded-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-blue-400 ${normalizedPathname === item.path ? 'bg-gradient-to-r from-blue-50 to-blue-100 text-blue-700 shadow-md border border-blue-200' : 'border border-transparent hover:bg-white/80 text-gray-700 hover:shadow-md'}`}>
-                    <div className={`flex-shrink-0 w-7 h-7 flex items-center justify-center ${normalizedPathname === item.path ? 'text-blue-600' : 'text-gray-600'}`}>
-                      {renderMenuIcon(item, normalizedPathname === item.path, 22)}
-                    </div>
-                    <span className="ml-4 whitespace-nowrap font-medium text-base">{item.label}</span>
-                  </Link>
-                </li>
-              ))}
+              {menuItems.map((item, index) => renderMenuItem(item, index, true))}
             </ul>
           </nav>
         </div>
@@ -195,27 +365,15 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
   }
 
   return (
-    <div className={`fixed left-0 z-40 top-16 h-[calc(100vh-4rem)] bg-white shadow-xl rounded-r-3xl overflow-hidden backdrop-blur-sm transition-all duration-300 ease-out border-r border-gray-100 ${hoveredSidebar ? 'w-64' : 'w-18.5'}`} onMouseEnter={() => !isMobile && setHoveredSidebar(true)} onMouseLeave={() => !isMobile && setHoveredSidebar(false)} style={{ transform: 'translateX(0)', boxShadow: hoveredSidebar ? '0 25px 50px -12px rgba(0, 0, 0, 0.15), 0 10px 20px -5px rgba(0, 0, 0, 0.1)' : '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)' }}>
-      <nav className="py-4 h-full">
+    <div
+      className={`fixed left-0 z-40 top-16 h-[calc(100vh-4rem)] bg-white shadow-xl rounded-r-3xl overflow-hidden backdrop-blur-sm transition-all duration-300 ease-out border-r border-gray-100 ${hoveredSidebar ? 'w-73' : 'w-20'}`}
+      onMouseEnter={() => !isMobile && setHoveredSidebar(true)}
+      onMouseLeave={() => !isMobile && setHoveredSidebar(false)}
+      style={{ transform: 'translateX(0)', boxShadow: hoveredSidebar ? '0 25px 50px -12px rgba(0, 0, 0, 0.15), 0 10px 20px -5px rgba(0, 0, 0, 0.1)' : '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)' }}
+    >
+      <nav className="py-4 h-full overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-gray-200">
         <ul className="space-y-1 px-3">
-          {menuItems.map((item) => (
-            <li key={item.path}>
-              <div className="relative group">
-                <Link href={item.path} onClick={handleNavigation} className={`relative flex items-center h-12 px-3 group/link rounded-xl transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 ${normalizedPathname === item.path ? 'bg-gradient-to-r from-blue-50 to-blue-100 text-blue-700 shadow-sm border border-blue-200' : 'border border-transparent hover:bg-gray-50 text-gray-700 hover:shadow-sm hover:scale-[1.02]'}`}>
-                  <div className={`flex-shrink-0 w-6 h-6 flex items-center justify-center transition-all duration-200 ${normalizedPathname === item.path ? 'text-blue-600 scale-110' : 'text-gray-600 group-hover/link:text-gray-700 group-hover/link:scale-105'}`}>
-                    {renderMenuIcon(item, normalizedPathname === item.path, 20)}
-                  </div>
-                  <span className={`ml-4 whitespace-nowrap font-medium overflow-hidden transition-all duration-300 ease-out ${hoveredSidebar ? 'opacity-100 translate-x-0 w-auto' : 'opacity-0 translate-x-2 w-0'}`}>{item.label}</span>
-                </Link>
-                {!hoveredSidebar && (
-                  <div className="absolute left-full top-1/2 transform -translate-y-1/2 ml-2 px-2 py-1 bg-gray-900 text-white text-sm rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-                    {item.label}
-                    <div className="absolute left-0 top-1/2 transform -translate-y-1/2 -translate-x-1 w-2 h-2 bg-gray-900 rotate-45"></div>
-                  </div>
-                )}
-              </div>
-            </li>
-          ))}
+          {menuItems.map((item, index) => renderMenuItem(item, index, false))}
         </ul>
       </nav>
     </div>
@@ -261,8 +419,28 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
           </div>
         </div>
       </div>
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[100]">
+         <div className="hidden md:block border-b-2 border-red-600 pb-0.5 bg-white/90 px-24 text-center">
+            <span className="font-normal text-gray-600 mr-1">
+               Zadanie od MSiT:
+            </span>
+            <span className="font-bold text-gray-900">
+               AI W SŁUŻBIE DECYZJI
+            </span>
+         </div>
+      </div>
       <div className="flex-1"></div>
       <div className="flex items-center space-x-4">
+        <Link
+          href="/dashboard/ezd"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hidden md:block px-4 py-2 bg-gray-50 hover:bg-gray-100 rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer hover:scale-105"
+        >
+           <span className="text-sm font-medium text-gray-800 font-['Poppins']">
+             Symulator EZD
+           </span>
+        </Link>
         {isClient && (
           <a href="https://www.linkedin.com/in/move37th/" target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer hover:scale-105">
             <div className="flex items-center gap-2 font-['Poppins']">
@@ -289,6 +467,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 }) => {
   const { hoveredSidebar, isNavigating, isMobileMenuOpen, setIsMobileMenuOpen } = useLayout();
   const pathname = usePathname();
+  const isEzdPage = pathname?.includes('/dashboard/ezd');
   const [isMobile, setIsMobile] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const [isScreenSizeDetected, setIsScreenSizeDetected] = useState(false);
@@ -337,7 +516,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   }, []);
 
   if (isCheckingAuth) {
-    return null; // Zapobiega "miganiu" przed sprawdzeniem localStorage
+    return null;
   }
 
   const menuItems = getMenuItems(currentLang);
@@ -348,10 +527,6 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
   return (
     <>
-      {/* --- MODAL LOGOWANIA ---
-         Renderowany warunkowo nad resztą strony.
-         Używamy `backdrop-blur-xl` aby zamazać to co jest pod spodem (Dashboard).
-      */}
       {!isAuthenticated && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/40 backdrop-blur-md transition-all duration-500">
           <div className="w-full max-w-sm p-8 bg-white/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/20 flex flex-col items-center transform transition-all animate-in fade-in zoom-in-95 duration-300">
@@ -406,14 +581,8 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         </div>
       )}
 
-      {/* --- GŁÓWNA STRONA (DASHBOARD) ---
-         Renderowana ZAWSZE (nawet jak nie ma logowania),
-         ale przykryta modalem jeśli !isAuthenticated.
-         Dodatkowo dodałem klasę `filter blur-sm` dla kontenera dashboardu gdy zablokowany,
-         żeby wzmocnić efekt (opcjonalne, ale pomaga przy słabszym wsparciu backdrop).
-      */}
       <div className={`flex h-screen bg-gray-100 font-sans overflow-hidden transition-all duration-500 ${!isAuthenticated ? 'blur-sm scale-[0.99] pointer-events-none select-none' : 'blur-0 scale-100'}`}>
-        {!disableMenu && <Sidebar currentLang={currentLang} />}
+        {!disableMenu && !isEzdPage && <Sidebar currentLang={currentLang} />}
         {isMobile && isMobileMenuOpen && (
           <div
             className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm transition-opacity duration-300"
@@ -423,12 +592,12 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         )}
         <div
           className={`flex-1 flex flex-col transition-all duration-300 ease-out ${
-            isMobile || disableMenu || !isScreenSizeDetected
-              ? 'ml-0'
-              : hoveredSidebar
-                ? 'ml-64'
-                : 'ml-20'
-          }`}
+          isMobile || disableMenu || isEzdPage || !isScreenSizeDetected // <--- TU DODANO ZMIANĘ
+            ? 'ml-0'
+            : hoveredSidebar
+              ? 'ml-64'
+              : 'ml-20'
+        }`}
           style={{
             paddingTop: '64px',
             height: '100vh'
@@ -438,7 +607,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
 
           <main className="flex-1 px-2 pb-4 pt-1.5 overflow-auto bg-gray-100 relative">
             {isNavigating && (
-              <div className="absolute inset-0 z-[100] bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-xl">
+              <div className="absolute inset-0 z-30 bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-xl">
                 <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-purple-600 border-r-transparent"></div>
               </div>
             )}
