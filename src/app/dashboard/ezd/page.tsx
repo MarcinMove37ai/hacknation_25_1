@@ -45,8 +45,12 @@ export default function EzdSimulatorPage() {
   };
 
   // --- LOGIKA INTEGRACJI Z API ---
+  // Wklej to w miejsce starej funkcji handleUpload w pliku page.tsx
+
   const handleUpload = async () => {
     if (!file) return;
+
+    // Ustawiamy status, żeby pokazać loader
     setUploadStatus('uploading');
     setErrorMessage('');
 
@@ -54,28 +58,58 @@ export default function EzdSimulatorPage() {
     formData.append('file', file);
 
     try {
-      // UWAGA: Upewnij się, że Twój route.ts jest w folderze app/api/upload/route.ts
-      // Jeśli jest w innym miejscu, zmień poniższą ścieżkę.
-      const response = await fetch('/api/upload', {
+      // --- KROK 1: WYSYŁKA PLIKU I OCR ---
+      console.log('🚀 1. Wysyłanie pliku do /api/upload...');
+      const uploadResponse = await fetch('/api/upload', {
         method: 'POST',
         body: formData,
       });
 
-      const data = await response.json();
+      const uploadData = await uploadResponse.json();
 
-      if (!response.ok) {
-        throw new Error(data.error || 'Wystąpił błąd podczas przesyłania');
+      if (!uploadResponse.ok) {
+        throw new Error(uploadData.error || 'Błąd podczas przesyłania pliku');
       }
 
+      console.log('✅ OCR zakończony. Wynik:', uploadData);
+
+      // Sprawdzamy, czy mamy tekst z OCR (czy Python coś zwrócił)
+      // Uwaga: upewnij się, że Twój Python zwraca pole "text" w obiekcie OCR
+      const extractedText = uploadData.ocr?.text;
+
+      if (!extractedText) {
+        console.warn('⚠️ Brak tekstu z OCR - kończę proces (może to nie był PDF?)');
+        setUploadStatus('success'); // Sukces samego uploadu, ale bez AI
+        return;
+      }
+
+      // --- KROK 2: ANALIZA AI I ZAPIS DO BAZY ---
+      console.log('🤖 2. Wysyłanie tekstu do /api/decisions/process...');
+
+      const processResponse = await fetch('/api/decisions/process', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          documentText: extractedText, // Przekazujemy tekst odczytany w kroku 1
+          fileName: file.name
+        }),
+      });
+
+      const processData = await processResponse.json();
+
+      if (!processResponse.ok) {
+        throw new Error(processData.error || 'Błąd podczas analizy AI');
+      }
+
+      console.log('🎉 Pełny sukces! Decyzja zapisana:', processData);
       setUploadStatus('success');
-      console.log('Plik przesłany:', data);
-      if (data.ocr && !data.ocr.error) {
-        console.log('Tekst OCR:', data.ocr.text);
-      }
+
     } catch (error) {
-      console.error('Błąd uploadu:', error);
+      console.error('❌ Błąd procesu:', error);
       setUploadStatus('error');
-      setErrorMessage(error instanceof Error ? error.message : 'Nieznany błąd połączenia');
+      setErrorMessage(error instanceof Error ? error.message : 'Nieznany błąd');
     }
   };
 
