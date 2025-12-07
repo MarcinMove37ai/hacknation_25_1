@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
+import { getDecisionStatsAction } from '@/app/actions';
 
 // Custom Icon Components
 interface CustomIconProps {
@@ -69,6 +70,7 @@ interface SubMenuItem {
   label: string;
   path: string;
   count?: number;
+  statusKey?: 'total' | 'new' | 'in_progress' | 'pending' | 'closed';
 }
 
 interface MenuItem {
@@ -80,17 +82,25 @@ interface MenuItem {
   subItems?: SubMenuItem[];
 }
 
-const getMenuItems = (lang: 'pl'): MenuItem[] => [
+interface DecisionStats {
+  total: number;
+  new: number;
+  in_progress: number;
+  pending: number;
+  closed: number;
+}
+
+const getMenuItems = (lang: 'pl', stats?: DecisionStats): MenuItem[] => [
   { IconComponent: Home, label: 'Dashboard', path: '/dashboard', fullWidth: true },
   {
     IconComponent: FileText,
     label: 'Postępowania (EZD)',
     path: '/dashboard/cases',
     subItems: [
-      { label: 'Wszystkie', path: '/dashboard/cases', count: 152 },
-      { label: 'W toku', path: '/dashboard/cases?status=in_progress', count: 45 },
-      { label: 'Do wyjaśnienia', path: '/dashboard/cases?status=pending', count: 12 },
-      { label: 'Zakończone', path: '/dashboard/cases?status=closed', count: 95 }
+      { label: 'Wszystkie', path: '/dashboard/cases', count: stats?.total || 0, statusKey: 'total' },
+      { label: 'W toku', path: '/dashboard/cases?status=in_progress', count: stats?.in_progress || 0, statusKey: 'in_progress' },
+      { label: 'Do wyjaśnienia', path: '/dashboard/cases?status=pending', count: stats?.pending || 0, statusKey: 'pending' },
+      { label: 'Zakończone', path: '/dashboard/cases?status=closed', count: stats?.closed || 0, statusKey: 'closed' }
     ]
   },
   {
@@ -125,11 +135,9 @@ const getMenuItems = (lang: 'pl'): MenuItem[] => [
 const getCurrentPageLabel = (path: string | null, lang: 'pl' = 'pl') => {
   if (!path) return 'Dashboard';
 
-  // --- NOWY KOD: Wyjątek dla etykiety Symulatora ---
   if (path.includes('/dashboard/ezd')) {
     return 'Symulator EZD PUW';
   }
-  // ------------------------------------------------
 
   const menuItems = getMenuItems(lang);
   let menuItem = menuItems.find(item => path.split('?')[0] === item.path);
@@ -149,6 +157,8 @@ interface LayoutContextType {
   setIsMobileMenuOpen: (value: boolean) => void;
   isNavigating: boolean;
   setIsNavigating: (value: boolean) => void;
+  decisionStats: DecisionStats;
+  refreshStats: () => Promise<void>;
 }
 
 const LayoutContext = createContext<LayoutContextType | null>(null);
@@ -164,6 +174,13 @@ export const LayoutProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [decisionStats, setDecisionStats] = useState<DecisionStats>({
+    total: 0,
+    new: 0,
+    in_progress: 0,
+    pending: 0,
+    closed: 0
+  });
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -171,8 +188,28 @@ export const LayoutProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   }, [hoveredSidebar]);
 
+  const refreshStats = async () => {
+    const result = await getDecisionStatsAction();
+    if (result.success) {
+      setDecisionStats(result.data);
+    }
+  };
+
+  useEffect(() => {
+    refreshStats();
+  }, []);
+
   return (
-    <LayoutContext.Provider value={{ hoveredSidebar, setHoveredSidebar, isMobileMenuOpen, setIsMobileMenuOpen, isNavigating, setIsNavigating }}>
+    <LayoutContext.Provider value={{
+      hoveredSidebar,
+      setHoveredSidebar,
+      isMobileMenuOpen,
+      setIsMobileMenuOpen,
+      isNavigating,
+      setIsNavigating,
+      decisionStats,
+      refreshStats
+    }}>
       {children}
     </LayoutContext.Provider>
   );
@@ -196,9 +233,9 @@ const renderMenuIcon = (item: MenuItem, isActive: boolean, size: number = 20) =>
 interface SidebarProps { currentLang: 'pl'; }
 
 const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
-  const { hoveredSidebar, setHoveredSidebar, isMobileMenuOpen, setIsMobileMenuOpen, setIsNavigating } = useLayout();
+  const { hoveredSidebar, setHoveredSidebar, isMobileMenuOpen, setIsMobileMenuOpen, setIsNavigating, decisionStats } = useLayout();
   const pathname = usePathname();
-  const menuItems = getMenuItems(currentLang);
+  const menuItems = getMenuItems(currentLang, decisionStats);
   const [isMobile, setIsMobile] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const [isScreenSizeDetected, setIsScreenSizeDetected] = useState(false);
@@ -250,7 +287,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
     const isExpanded = expandedMenus.includes(item.path);
     const showExpandedContent = isExpanded && (isMobileRender || hoveredSidebar);
 
-    // Wspólna zawartość dla Linku i Diva
     const menuItemContent = (
       <>
         <div className={`flex-shrink-0 w-6 h-6 flex items-center justify-center transition-all duration-200 ${isActive ? 'text-blue-600 scale-110' : 'text-gray-600 group-hover/link:text-gray-700 group-hover/link:scale-105'}`}>
@@ -269,7 +305,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
       </>
     );
 
-    // Klasy CSS dla głównego elementu
     const commonClasses = `relative flex items-center min-h-[48px] px-3 group/link rounded-xl transition-all duration-200 ease-out focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-1 cursor-pointer
       ${isActive && !hasSubItems ? 'bg-gradient-to-r from-blue-50 to-blue-100 text-blue-700 shadow-sm border border-blue-200' : 'border border-transparent hover:bg-gray-50 text-gray-700 hover:shadow-sm hover:scale-[1.02]'}
     `;
@@ -278,7 +313,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
       <li key={item.path} className="mb-1" style={{ transitionDelay: isMobileRender ? `${index * 50}ms` : '0ms' }}>
         <div className="relative group">
 
-          {/* LOGIKA: Jeśli są podkategorie -> DIV (Tylko rozwijanie). Jeśli nie -> LINK (Nawigacja) */}
           {hasSubItems ? (
             <div
               onClick={() => toggleMenu(item.path)}
@@ -296,7 +330,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
             </Link>
           )}
 
-          {/* Podmenu (Subitems) */}
           {hasSubItems && (
             <div className={`overflow-hidden transition-all duration-300 ease-in-out bg-white ${(showExpandedContent) ? 'max-h-96 opacity-100 mt-1' : 'max-h-0 opacity-0'}`}>
               <ul className="space-y-1 pt-1 pb-2">
@@ -335,7 +368,6 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
             </div>
           )}
 
-          {/* Tooltip dla zwiniętego paska (tylko desktop) */}
           {!hoveredSidebar && !isMobileRender && (
             <div className="absolute left-full top-1/2 transform -translate-y-1/2 ml-2 px-2 py-1 bg-gray-900 text-white text-sm rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
               {item.label}
@@ -387,7 +419,6 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
   const { isMobileMenuOpen, setIsMobileMenuOpen } = useLayout();
   const router = useRouter();
 
-  // 1. Sprawdzamy czy jesteśmy na stronie symulatora
   const pathname = usePathname();
   const isEzdPage = pathname?.includes('/dashboard/ezd');
 
@@ -417,7 +448,6 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
           </button>
         )}
 
-        {/* LOGO: Jeśli isEzdPage, blokujemy onClick i zmieniamy kursor */}
         <div
           className={`mr-4 ${isEzdPage ? 'cursor-default' : 'cursor-pointer'}`}
           onClick={() => !isEzdPage && router.push('/dashboard')}
@@ -447,7 +477,6 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
           href="/dashboard/ezd"
           target="_blank"
           rel="noopener noreferrer"
-          // Tutaj też blokujemy wizualnie interakcję jeśli już jesteśmy na EZD
           className={`hidden md:block px-4 py-2 bg-gray-50 rounded-xl border border-gray-200 shadow-sm transition-all font-['Poppins'] text-sm font-medium text-gray-800
             ${isEzdPage ? 'cursor-default' : 'hover:bg-gray-100 hover:shadow-md cursor-pointer hover:scale-105'}`
           }
@@ -457,9 +486,7 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
         </Link>
 
         {isClient && (
-          // LINKEDIN: Zmieniamy tag <a> na <div> jeśli isEzdPage
           !isEzdPage ? (
-            // Wersja AKTYWNA (Link)
             <a href="https://www.linkedin.com/in/move37th/" target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer hover:scale-105">
               <div className="flex items-center gap-2 font-['Poppins']">
                 <span className="text-sm font-medium text-gray-800">Marcin Lisiak</span>
@@ -468,7 +495,6 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
               </div>
             </a>
           ) : (
-            // Wersja NIEAKTYWNA (Div) - te same kolory, brak linku
             <div className="px-4 py-2 bg-white rounded-xl border border-gray-200 shadow-sm cursor-default">
               <div className="flex items-center gap-2 font-['Poppins']">
                 <span className="text-sm font-medium text-gray-800">Marcin Lisiak</span>
@@ -503,7 +529,6 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const [currentLang] = useState<'pl'>('pl');
   const [langReady, setLangReady] = useState(false);
 
-  // --- LOGIC AUTHENTICATION START ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState(false);
@@ -530,7 +555,6 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
       setTimeout(() => setLoginError(false), 2000);
     }
   };
-  // --- LOGIC AUTHENTICATION END ---
 
   useEffect(() => {
     const handleResize = () => {
@@ -620,7 +644,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         )}
         <div
           className={`flex-1 flex flex-col transition-all duration-300 ease-out ${
-          isMobile || disableMenu || isEzdPage || !isScreenSizeDetected // <--- TU DODANO ZMIANĘ
+          isMobile || disableMenu || isEzdPage || !isScreenSizeDetected
             ? 'ml-0'
             : hoveredSidebar
               ? 'ml-64'
@@ -703,3 +727,5 @@ const DashboardLayoutWithProvider: React.FC<DashboardLayoutProps> = (props) => {
 };
 
 export default DashboardLayoutWithProvider;
+
+export { useLayout };

@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { getDecisionsAction } from '@/app/actions';
+import { useLayout } from '../layout';
+import { useSearchParams } from 'next/navigation';
 import {
   FileText, ChevronDown, Search, Filter, Download, Clock,
   CheckCircle, AlertCircle, Calendar, Scale, Play, Send, Upload, File, Eye,
@@ -186,12 +188,18 @@ export default function SciezkaPrawnaPage() {
   const [data, setData] = useState<DecisionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
+  // NOWE: Pobierz parametr statusu z URL
+  const searchParams = useSearchParams();
+  const statusFilter = searchParams.get('status') as DecisionStatus | null;
+
+  // NOWE: Hook do odświeżania statystyk
+  const { refreshStats } = useLayout();
+
   useEffect(() => {
       async function loadData() {
         try {
           const result = await getDecisionsAction();
 
-          // 👇 TU zobaczysz pełny rekord z bazy (wszystkie kolumny modelu Decision)
           console.log('RAW decisions from DB:', result.data);
 
           if (result.success && result.data) {
@@ -206,6 +214,9 @@ export default function SciezkaPrawnaPage() {
             });
 
             setData(mappedData);
+
+            // NOWE: Odśwież statystyki po załadowaniu danych
+            await refreshStats();
           }
         } catch (e) {
           console.error("Failed to load decisions", e);
@@ -238,15 +249,15 @@ export default function SciezkaPrawnaPage() {
   }
 
   const createdAtDisplay = dbRecord.createdAt
-    ? new Date(dbRecord.createdAt).toISOString().slice(0, 10) // np. 2025-12-07
+    ? new Date(dbRecord.createdAt).toISOString().slice(0, 10)
     : '-';
 
   return {
     id: dbRecord.id,
     decisionNumber: dbRecord.decisionNumber || 'BRAK NR',
     organizer: dbRecord.organizator || 'Brak danych',
-    documentDate: dbRecord.documentDate || '-', // ZOSTAJE
-    createdAt: createdAtDisplay,                // NOWE
+    documentDate: dbRecord.documentDate || '-',
+    createdAt: createdAtDisplay,
     signedBy: dbRecord.signedBy || 'Nieznany',
     daysRemaining,
     status: (dbRecord.status as DecisionStatus) ?? 'new',
@@ -311,10 +322,23 @@ export default function SciezkaPrawnaPage() {
     setExpandedId(expandedId === id ? null : id);
   };
 
-  const filteredData = data.filter(item =>
-    item.decisionNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.organizer.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // ZMIENIONE: Filtrowanie z uwzględnieniem statusu z URL
+  const filteredData = data.filter(item => {
+    // Filtruj po statusie jeśli jest w URL
+    if (statusFilter && item.status !== statusFilter) {
+      return false;
+    }
+
+    // Filtruj po wyszukiwanej frazie
+    if (searchTerm) {
+      return (
+        item.decisionNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        item.organizer.toLowerCase().includes(searchTerm.toLowerCase())
+      );
+    }
+
+    return true;
+  });
 
   return (
     <div className="flex flex-col h-full space-y-6">
