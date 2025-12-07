@@ -159,7 +159,10 @@ ${documentText}`;
     console.log('───────────────────────────────────────────────');
     console.log('🔗 BUDOWANIE URL DO PLIKU:');
 
-    const appUrl = process.env.APP_URL || 'http://localhost:3000';
+    const host = request.headers.get('host') || 'localhost:3000';
+    const protocol = request.headers.get('x-forwarded-proto') ||
+                     (host.includes('localhost') ? 'http' : 'https');
+    const appUrl = `${protocol}://${host}`;
     console.log('  1. APP_URL:', appUrl);
 
     let finalFileName = fileName || decisionData.filePath || 'unknown.pdf';
