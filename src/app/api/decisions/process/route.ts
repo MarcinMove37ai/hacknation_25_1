@@ -106,6 +106,7 @@ export async function POST(request: NextRequest) {
     const AI_MODEL = process.env.PREMIUM_AI_MODEL || 'claude-sonnet-4-20250514';
     console.log('🤖 Model AI:', AI_MODEL);
 
+    const timestamp = Date.now();
     const prompt = `Jesteś ekspertem od analizy dokumentów prawnych. Przeanalizuj poniższy dokument odwołania.
 Wyciągnij kluczowe informacje i zwróć JSON.
 
@@ -121,12 +122,14 @@ Oczekiwany format JSON:
   "signedBy": "Podpisany przez",
   "filePath": "${fileName || 'unknown.pdf'}",
   "status": "new",
-  "organizator": "Fikcyjna Nazwa (mock)",
+  "organizator": "KrótkaNazwa (mock)",
   "decisionText": "Treść merytoryczna"
 }
 
 INSTRUKCJE:
-1. "organizator": wymyśl nazwę z dopiskiem "(mock)".
+1. "organizator": wymyśl LOSOWĄ, KRÓTKĄ (1-3 słowa) nazwę organizacji sportowej z dopiskiem "(mock)".
+   WAŻNE: Za każdym razem generuj RÓŻNĄ nazwę! Timestamp: ${timestamp}
+   Przykłady: "Olimp Gdańsk (mock)", "Siła Wrocław (mock)", "Tiger Team (mock)"
 2. "decisionText": czysty tekst bez nagłówków/stopek.
 3. Zwróć TYLKO JSON.
 
