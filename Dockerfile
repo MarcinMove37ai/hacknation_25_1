@@ -19,12 +19,22 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG DATABASE_URL=postgresql://dummy:dummy@localhost:5432/dummy
 ENV DATABASE_URL=$DATABASE_URL
 
-# --- KLUCZOWA ZMIANA ---
+# =============================================================================
+# KLUCZOWA ZMIANA - PRZEKAZANIE NEXT_PUBLIC_* ZMIENNYCH DO BUILDU
+# =============================================================================
+# Railway automatycznie przekaże te zmienne podczas budowania
+ARG NEXT_PUBLIC_ANTHROPIC_API_KEY
+ARG NEXT_PUBLIC_VOYAGE_API_KEY
+
+# Ustawienie jako ENV aby Next.js je zobaczył podczas build
+ENV NEXT_PUBLIC_ANTHROPIC_API_KEY=$NEXT_PUBLIC_ANTHROPIC_API_KEY
+ENV NEXT_PUBLIC_VOYAGE_API_KEY=$NEXT_PUBLIC_VOYAGE_API_KEY
+# =============================================================================
+
 # Generowanie klienta Prisma PRZED buildem
 RUN npx prisma generate
-# -----------------------
 
-# Budowanie aplikacji
+# Budowanie aplikacji (teraz z dostępem do NEXT_PUBLIC_*)
 RUN npm run build
 
 # Etap 2: Produkcja
@@ -41,14 +51,12 @@ COPY --from=builder /app/package*.json ./
 # Instalacja tylko zależności produkcyjnych
 RUN npm ci --omit=dev
 
-# --- KLUCZOWA ZMIANA 2 ---
 # Kopiowanie wygenerowanego klienta Prisma z etapu budowania
 # Dzięki temu aplikacja produkcyjna ma dostęp do bazy danych
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
 # Kopiujemy też folder prisma (opcjonalnie, przydatne do migracji)
 COPY --from=builder /app/prisma ./prisma
-# -------------------------
 
 # Kopiowanie zbudowanej aplikacji
 COPY --from=builder /app/.next ./.next
