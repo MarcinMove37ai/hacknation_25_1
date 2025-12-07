@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
     console.log('  - fileName z requestu:', fileName || '❌ BRAK');
     console.log('  - Długość tekstu:', documentText.length, 'znaków');
 
-    const AI_MODEL = process.env.PREMIUM_AI_MODEL || 'claude-sonnet-4-20250514';
+    const AI_MODEL = process.env.PREMIUM_AI_MODEL || 'claude-sonnet-4-5';
     console.log('🤖 Model AI:', AI_MODEL);
 
     const timestamp = Date.now();

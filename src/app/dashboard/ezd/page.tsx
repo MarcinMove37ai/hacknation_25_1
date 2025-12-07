@@ -316,7 +316,7 @@ export default function EzdSimulatorPage() {
                 ) : uploadStatus === 'uploading' ? (
                   <>
                     <Loader2 size={24} className="animate-spin" />
-                    <span>Wysyłanie na serwer...</span>
+                    <span>Anonimizacja i przesyłanie...</span>
                   </>
                 ) : uploadStatus === 'error' ? (
                   <>

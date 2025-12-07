@@ -4,7 +4,7 @@
 import React, { useState, ReactNode, useEffect, createContext, useContext, Suspense } from 'react';
 import Link from 'next/link';
 import type { LucideIcon } from 'lucide-react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import {
   Home,
   Menu,
@@ -106,20 +106,12 @@ const getMenuItems = (lang: 'pl', stats?: DecisionStats): MenuItem[] => [
   {
     IconComponent: Library,
     label: 'Baza decyzji',
-    path: '/dashboard/decision',
-    subItems: [
-      { label: 'Czatuj', path: '/dashboard/decision?mode=chat' },
-      { label: 'Przeglądaj', path: '/dashboard/decision?mode=browse' }
-    ]
+    path: '/dashboard/decision'
   },
   {
     IconComponent: Bot,
     label: 'Czat z KPA',
-    path: '/dashboard/kpa',
-    subItems: [
-      { label: 'Czatuj', path: '/dashboard/kpa?mode=chat' },
-      { label: 'Przeglądaj', path: '/dashboard/kpa?mode=browse' }
-    ]
+    path: '/dashboard/kpa'
   }
 ];
 
@@ -408,7 +400,6 @@ interface HeaderProps { currentLang: 'pl'; langReady: boolean; }
 
 const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
   const { isMobileMenuOpen, setIsMobileMenuOpen } = useLayout();
-  const router = useRouter();
 
   const pathname = usePathname();
   const isEzdPage = pathname?.includes('/dashboard/ezd');
@@ -439,16 +430,16 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
           </button>
         )}
 
-        <div
-          className={`mr-4 ${isEzdPage ? 'cursor-default' : 'cursor-pointer'}`}
-          onClick={() => !isEzdPage && router.push('/dashboard')}
+        <Link
+          href="/dashboard"
+          className="mr-4 cursor-pointer group"
         >
           <div className="flex items-center">
-            <div className="h-12 w-auto bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-center px-3 py-2">
+            <div className="h-12 w-auto bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-center px-3 py-2 transition-all duration-200 group-hover:shadow-xl group-hover:scale-105">
               <img src="/logo.webp" alt="Logo" className="h-full w-auto object-contain" />
             </div>
           </div>
-        </div>
+        </Link>
       </div>
 
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[100]">
@@ -704,10 +695,26 @@ const DashboardLayoutWithProvider: React.FC<DashboardLayoutProps> = (props) => {
   return (
     <LayoutProvider>
       <Suspense fallback={
-        <div className="flex h-screen items-center justify-center bg-gray-100">
-          <div className="text-center">
-            <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-purple-600 border-r-transparent"></div>
-            <p className="mt-4 text-gray-600">Loading...</p>
+        <div className="flex h-screen items-center justify-center bg-gradient-to-b from-blue-50/30 to-white">
+          <div className="text-center space-y-6">
+            {/* Klikalne logo */}
+            <Link
+              href="/dashboard"
+              className="inline-block group cursor-pointer transition-all duration-300 hover:scale-105"
+            >
+              <h1 className="text-6xl font-bold text-blue-900 transition-colors duration-300 group-hover:text-blue-700">
+                move<span className="font-light">37th</span>
+              </h1>
+              <p className="text-gray-500 text-sm mt-2 transition-colors duration-300 group-hover:text-gray-700">
+                Kliknij aby wrócić do Dashboard
+              </p>
+            </Link>
+
+            {/* Loading spinner */}
+            <div className="flex flex-col items-center gap-3 mt-8">
+              <div className="inline-block h-10 w-10 animate-spin rounded-full border-4 border-solid border-blue-900 border-r-transparent"></div>
+              <p className="text-gray-600 animate-pulse">Ładowanie...</p>
+            </div>
           </div>
         </div>
       }>
