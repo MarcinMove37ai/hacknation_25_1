@@ -1,11 +1,8 @@
-'use client';
-
-import MedicalChatbot from '@/components/ui';
-
 export default function DaneBezTwarzyPage() {
   return (
-    <div className="h-screen">
-      <MedicalChatbot />
+    <div>
+      <h1 className="text-2xl font-bold mb-4">KPA</h1>
+      <p>Treść kary...</p>
     </div>
-  );
+  )
 }
