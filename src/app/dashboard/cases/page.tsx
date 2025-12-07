@@ -7,7 +7,7 @@ import { useSearchParams } from 'next/navigation';
 import {
   FileText, ChevronDown, Search, Filter, Download, Clock,
   CheckCircle, AlertCircle, Calendar, Scale, Play, Send, Upload, File, Eye,
-  Building2, Hourglass
+  Building2, Hourglass, X
 } from 'lucide-react';
 
 // --- TYPY DANYCH ---
@@ -25,6 +25,8 @@ interface PrismaDecision {
   organizator: string | null;
   createdAt: Date | string;
   appealDays: number | null;
+  // NOWE – pełna treść z bazy
+  decisionText: string | null;
 }
 
 interface AttachedDocument {
@@ -42,11 +44,13 @@ interface DecisionRecord {
   id: string;
   decisionNumber: string;
   organizer: string;
-  documentDate: string;   // ZOSTAJE – dalej możesz używać
-  createdAt: string;      // NOWE pole do kolumny
+  documentDate: string;
+  createdAt: string;
   signedBy: string;
   daysRemaining: number | null;
   status: DecisionStatus;
+  // NOWE – pełna treść po stronie UI
+  decisionText: string | null;
   documents: AttachedDocument[];
 }
 
@@ -122,7 +126,7 @@ const renderPrimaryAction = (status: DocStatus) => {
 };
 
 /**
- * Akcje pliku – TERAZ dostaje całego doca, dzięki czemu mamy dostęp do filePath.
+ * Akcje pliku – dostaje całego doca, dzięki czemu mamy dostęp do filePath.
  */
 const renderFileAction = (doc: AttachedDocument) => {
   const { status, filePath } = doc;
@@ -145,7 +149,6 @@ const renderFileAction = (doc: AttachedDocument) => {
         </a>
       );
     case 'processed':
-      // Jeśli nie ma ścieżki do pliku – pokazujemy info, że nie ma czego pobrać
       if (!filePath) {
         return (
           <span className="text-xs text-gray-400 italic">
@@ -153,8 +156,6 @@ const renderFileAction = (doc: AttachedDocument) => {
           </span>
         );
       }
-
-      // Jeśli jest ścieżka – podpinamy ją jako link
       return (
         <a
           href={filePath}
@@ -188,109 +189,120 @@ export default function SciezkaPrawnaPage() {
   const [data, setData] = useState<DecisionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // NOWE: Pobierz parametr statusu z URL
+  // MODAL: podgląd struktury danych + pełna treść
+  const [debugModalOpen, setDebugModalOpen] = useState(false);
+  const [debugRecord, setDebugRecord] = useState<DecisionRecord | null>(null);
+
+  const openDebugModal = (record: DecisionRecord) => {
+    setDebugRecord(record);
+    setDebugModalOpen(true);
+  };
+
+  const closeDebugModal = () => {
+    setDebugModalOpen(false);
+    setDebugRecord(null);
+  };
+
   const searchParams = useSearchParams();
   const statusFilter = searchParams.get('status') as DecisionStatus | null;
 
-  // NOWE: Hook do odświeżania statystyk
   const { refreshStats } = useLayout();
 
   useEffect(() => {
-      async function loadData() {
-        try {
-          const result = await getDecisionsAction();
+    async function loadData() {
+      try {
+        const result = await getDecisionsAction();
 
-          console.log('RAW decisions from DB:', result.data);
+        console.log('RAW decisions from DB:', result.data);
 
-          if (result.success && result.data) {
-            // @ts-ignore
-            const mappedData = result.data.map((dbRecord: any) => transformToUiModel(dbRecord));
-            console.log('Mapped decisions data (DecisionRecord[]):', mappedData);
+        if (result.success && result.data) {
+          // @ts-ignore – struktura z Prisma
+          const mappedData = result.data.map((dbRecord: PrismaDecision) => transformToUiModel(dbRecord));
+          console.log('Mapped decisions data (DecisionRecord[]):', mappedData);
 
-            mappedData.sort((a, b) => {
-              if (a.daysRemaining === null) return 1;
-              if (b.daysRemaining === null) return -1;
-              return a.daysRemaining - b.daysRemaining;
-            });
+          mappedData.sort((a, b) => {
+            if (a.daysRemaining === null) return 1;
+            if (b.daysRemaining === null) return -1;
+            return a.daysRemaining - b.daysRemaining;
+          });
 
-            setData(mappedData);
+          setData(mappedData);
 
-            // NOWE: Odśwież statystyki po załadowaniu danych
-            await refreshStats();
-          }
-        } catch (e) {
-          console.error("Failed to load decisions", e);
-        } finally {
-          setIsLoading(false);
+          await refreshStats();
         }
+      } catch (e) {
+        console.error("Failed to load decisions", e);
+      } finally {
+        setIsLoading(false);
       }
-      loadData();
+    }
+    loadData();
   }, []);
 
-
   const transformToUiModel = (dbRecord: PrismaDecision): DecisionRecord => {
-  console.log('DB record in transformToUiModel:', dbRecord);
+    console.log('DB record in transformToUiModel:', dbRecord);
 
-  let daysRemaining = null;
+    let daysRemaining: number | null = null;
 
-  if (dbRecord.createdAt && typeof dbRecord.appealDays === 'number') {
-    try {
-      const createdDate = new Date(dbRecord.createdAt);
-      const today = new Date();
-      createdDate.setHours(0, 0, 0, 0);
-      today.setHours(0, 0, 0, 0);
+    if (dbRecord.createdAt && typeof dbRecord.appealDays === 'number') {
+      try {
+        const createdDate = new Date(dbRecord.createdAt);
+        const today = new Date();
+        createdDate.setHours(0, 0, 0, 0);
+        today.setHours(0, 0, 0, 0);
 
-      const diffTime = today.getTime() - createdDate.getTime();
-      const daysPassed = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-      daysRemaining = dbRecord.appealDays - daysPassed;
-    } catch (error) {
-      daysRemaining = null;
-    }
-  }
-
-  const createdAtDisplay = dbRecord.createdAt
-    ? new Date(dbRecord.createdAt).toISOString().slice(0, 10)
-    : '-';
-
-  return {
-    id: dbRecord.id,
-    decisionNumber: dbRecord.decisionNumber || 'BRAK NR',
-    organizer: dbRecord.organizator || 'Brak danych',
-    documentDate: dbRecord.documentDate || '-',
-    createdAt: createdAtDisplay,
-    signedBy: dbRecord.signedBy || 'Nieznany',
-    daysRemaining,
-    status: (dbRecord.status as DecisionStatus) ?? 'new',
-    documents: [
-      {
-        id: `doc-${dbRecord.id}-appeal`,
-        name: 'Odwołanie',
-        type: 'PDF',
-        date: dbRecord.documentDate || '-',
-        size: '',
-        status: 'new',
-        filePath: dbRecord.filePath
-      },
-      {
-        id: `doc-${dbRecord.id}-ext`,
-        name: 'Przedłużenie',
-        type: 'DOC',
-        date: '-',
-        size: '-',
-        status: 'waiting',
-      },
-      {
-        id: `doc-${dbRecord.id}-dec`,
-        name: 'Decyzja',
-        type: 'PDF',
-        date: '-',
-        size: '-',
-        status: 'waiting',
+        const diffTime = today.getTime() - createdDate.getTime();
+        const daysPassed = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        daysRemaining = dbRecord.appealDays - daysPassed;
+      } catch (error) {
+        daysRemaining = null;
       }
-    ]
-  };
-};
+    }
 
+    const createdAtDisplay = dbRecord.createdAt
+      ? new Date(dbRecord.createdAt).toISOString().slice(0, 10)
+      : '-';
+
+    return {
+      id: dbRecord.id,
+      decisionNumber: dbRecord.decisionNumber || 'BRAK NR',
+      organizer: dbRecord.organizator || 'Brak danych',
+      documentDate: dbRecord.documentDate || '-',
+      createdAt: createdAtDisplay,
+      signedBy: dbRecord.signedBy || 'Nieznany',
+      daysRemaining,
+      status: (dbRecord.status as DecisionStatus) ?? 'new',
+      // tu przepuszczamy pełną treść
+      decisionText: dbRecord.decisionText ?? null,
+      documents: [
+        {
+          id: `doc-${dbRecord.id}-appeal`,
+          name: 'Odwołanie',
+          type: 'PDF',
+          date: dbRecord.documentDate || '-',
+          size: '',
+          status: 'new',
+          filePath: dbRecord.filePath
+        },
+        {
+          id: `doc-${dbRecord.id}-ext`,
+          name: 'Przedłużenie',
+          type: 'DOC',
+          date: '-',
+          size: '-',
+          status: 'waiting',
+        },
+        {
+          id: `doc-${dbRecord.id}-dec`,
+          name: 'Decyzja',
+          type: 'PDF',
+          date: '-',
+          size: '-',
+          status: 'waiting',
+        }
+      ]
+    };
+  };
 
   // --- HELPERY STYLÓW ---
 
@@ -322,14 +334,11 @@ export default function SciezkaPrawnaPage() {
     setExpandedId(expandedId === id ? null : id);
   };
 
-  // ZMIENIONE: Filtrowanie z uwzględnieniem statusu z URL
   const filteredData = data.filter(item => {
-    // Filtruj po statusie jeśli jest w URL
     if (statusFilter && item.status !== statusFilter) {
       return false;
     }
 
-    // Filtruj po wyszukiwanej frazie
     if (searchTerm) {
       return (
         item.decisionNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -353,16 +362,16 @@ export default function SciezkaPrawnaPage() {
         </div>
 
         <div className="flex items-center gap-3 w-full md:w-auto">
-           <div className="relative group w-full md:w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
-          <input
-            type="text"
-            placeholder="Szukaj sprawy..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-100 transition-all shadow-sm"
-          />
-        </div>
+          <div className="relative group w-full md:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+            <input
+              type="text"
+              placeholder="Szukaj sprawy..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-xl text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-100 transition-all shadow-sm"
+            />
+          </div>
           <button className="p-2 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-gray-600 shadow-sm">
             <Filter className="w-4 h-4" />
           </button>
@@ -386,6 +395,7 @@ export default function SciezkaPrawnaPage() {
                   <th className="py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">Data</th>
                   <th className="py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-40">Osoba</th>
                   <th className="py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">Pozostało</th>
+                  <th className="py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-32 text-right">Podgląd</th>
                   <th className="py-4 px-6 text-xs font-semibold text-gray-500 uppercase tracking-wider w-10"></th>
                 </tr>
               </thead>
@@ -409,23 +419,22 @@ export default function SciezkaPrawnaPage() {
                       </td>
 
                       <td className="py-4 px-6">
-                          <div
-                            className={`font-medium flex items-center gap-2 flex-1 whitespace-normal break-words ${getTextClass(row.organizer)}`}
-                            title={row.organizer}
-                          >
-                            <Building2 size={14} className="text-gray-400 flex-shrink-0" />
-                            <span>{row.organizer}</span>
-                          </div>
+                        <div
+                          className={`font-medium flex items-center gap-2 flex-1 whitespace-normal break-words ${getTextClass(row.organizer)}`}
+                          title={row.organizer}
+                        >
+                          <Building2 size={14} className="text-gray-400 flex-shrink-0" />
+                          <span>{row.organizer}</span>
+                        </div>
                       </td>
 
                       {/* Data (createdAt) */}
-                        <td className="py-4 px-6 text-sm">
-                          <div className={`flex items-center gap-2 ${getTextClass(String(row.createdAt))}`}>
-                            <Calendar size={14} className="text-gray-400 flex-shrink-0" />
-                            {String(row.createdAt).slice(0, 10)}
-                          </div>
-                       </td>
-
+                      <td className="py-4 px-6 text-sm">
+                        <div className={`flex items-center gap-2 ${getTextClass(String(row.createdAt))}`}>
+                          <Calendar size={14} className="text-gray-400 flex-shrink-0" />
+                          {String(row.createdAt).slice(0, 10)}
+                        </div>
+                      </td>
 
                       <td className="py-4 px-6 text-sm">
                         <div className={`max-w-[140px] truncate ${getTextClass(row.signedBy)}`} title={row.signedBy}>
@@ -448,9 +457,25 @@ export default function SciezkaPrawnaPage() {
                         )}
                       </td>
 
+                      {/* NOWA KOLUMNA – PRZYCISK PODGLĄDU DANYCH */}
+                      <td className="py-4 px-6 text-right">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDebugModal(row);
+                          }}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-200 shadow-sm"
+                        >
+                          <Eye size={14} />
+                          Dane
+                        </button>
+                      </td>
+
                       <td className="py-4 px-6 text-right">
                         <div className="flex justify-end">
-                          <button className={`p-2 rounded-lg transition-all duration-200 ${expandedId === row.id ? 'bg-blue-100 text-blue-600 rotate-180' : 'text-gray-400 hover:bg-gray-100'}`}>
+                          <button
+                            className={`p-2 rounded-lg transition-all duration-200 ${expandedId === row.id ? 'bg-blue-100 text-blue-600 rotate-180' : 'text-gray-400 hover:bg-gray-100'}`}
+                          >
                             <ChevronDown size={18} />
                           </button>
                         </div>
@@ -460,7 +485,7 @@ export default function SciezkaPrawnaPage() {
                     {/* SZCZEGÓŁY */}
                     {expandedId === row.id && (
                       <tr className="bg-gray-50/30 animate-in fade-in slide-in-from-top-1">
-                        <td colSpan={7} className="p-0 border-b border-gray-200 shadow-inner">
+                        <td colSpan={8} className="p-0 border-b border-gray-200 shadow-inner">
                           <div className="p-6 md:p-8">
 
                             <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -494,7 +519,7 @@ export default function SciezkaPrawnaPage() {
                                           <span>{doc.size}</span>
                                           {doc.date !== '-' && (
                                             <>
-                                              <span className="w-1 h-1 bg-gray-300 rounded-full"></span>
+                                              <span className="text-xs pl-6 text-gray-400">z dnia:</span>
                                               <span>{doc.date}</span>
                                             </>
                                           )}
@@ -528,6 +553,64 @@ export default function SciezkaPrawnaPage() {
           </div>
         )}
       </div>
+
+      {/* MODAL PODGLĄDU STRUKTURY DANYCH + PEŁNEJ TREŚCI */}
+      {debugModalOpen && debugRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Tło z blur + przyciemnienie */}
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={closeDebugModal}
+          />
+          {/* Karta modału */}
+          <div className="relative bg-white rounded-2xl shadow-2xl max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-blue-50 flex items-center justify-center">
+                  <FileText size={18} className="text-blue-500" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-800">
+                    Szczegóły sprawy i struktura danych
+                  </h2>
+                  <p className="text-xs text-gray-500">
+                    ID: <span className="font-mono">{debugRecord.id}</span> • Decyzja: {debugRecord.decisionNumber}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={closeDebugModal}
+                className="inline-flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+
+
+            <div className="px-6 py-3 border-b border-gray-100 bg-gray-50">
+              <p className="text-xs text-gray-500">
+                Poniżej widzisz dane po transformacji do modelu UI <span className="font-mono">DecisionRecord</span>. Przydatne do debugowania i dalszego rozwoju widoków.
+              </p>
+            </div>
+
+            <div className="px-6 py-4 overflow-auto bg-gray-900 text-gray-50 text-xs font-mono flex-1">
+              <pre className="whitespace-pre-wrap break-all">
+                {JSON.stringify(debugRecord, null, 2)}
+              </pre>
+            </div>
+
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-100 bg-gray-50">
+              <button
+                onClick={closeDebugModal}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors"
+              >
+                Zamknij
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
