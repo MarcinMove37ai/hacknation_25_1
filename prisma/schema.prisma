@@ -25,7 +25,6 @@ model Decision {
   createdAt        DateTime @default(now()) @map("created_at")
   status           String?  @map("status")
   url              String?  @map("url")
-  // --- Nowe kolumny ---
 
   // Długi tekst (odpowiednik TEXT w SQL)
   decisionText String? @map("decision_text") @db.Text
@@ -34,8 +33,32 @@ model Decision {
   organizator String? @map("organizator") @db.Text
 
   // Wektor dla embeddingów (1536 wymiarów)
-  // Typ Unsupported jest wymagany przez Prisma dla typów natywnych spoza standardu Prisma
   embedding Unsupported("vector(1536)")? @map("embedding")
+
+  // Relacja 1:1 z ExtensionDraft
+  extensionDraft ExtensionDraft? @relation("DecisionToExtensionDraft")
 
   @@map("decisions")
 }
+
+model ExtensionDraft {
+  id         String   @id @default(cuid())
+
+  // powiązanie 1:1 z Decision
+  decisionId String   @unique
+  decision   Decision @relation("DecisionToExtensionDraft", fields: [decisionId], references: [id])
+
+  // dane do wygenerowania przedłużenia
+  decisionNumber   String  // np. KP-TP-III.5222.7.16.2022.EL
+  organizer        String  // np. Błękitny Raj (mock)
+  legalForm        String  // np. "Stowarzyszenie"
+  organizerAddress String  // pełny adres siedziby
+  documentDate     String  // np. "2023-08-01"
+  decisionText     String  @db.Text // pełne uzasadnienie
+
+  // meta dokumentu (opcjonalnie)
+  filePath  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+

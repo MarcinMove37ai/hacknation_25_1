@@ -8,8 +8,9 @@ export async function getDecisionsAction() {
   try {
     // Pobieramy wszystkie rekordy, sortując od najnowszych
     const decisions = await prisma.decision.findMany({
-      orderBy: {
-        createdAt: 'desc',
+      orderBy: { createdAt: 'desc' },
+      include: {
+        extensionDraft: true,   // 👈 NAZWA relacji z Prisma (sprawdź w schema.prisma)
       },
     });
     return { success: true, data: decisions };

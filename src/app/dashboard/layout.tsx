@@ -114,15 +114,6 @@ const getMenuItems = (lang: 'pl', stats?: DecisionStats): MenuItem[] => [
   },
   {
     IconComponent: Bot,
-    label: 'Czat z Ustawą oITiPUT',
-    path: '/dashboard/uoitiput',
-    subItems: [
-      { label: 'Czatuj', path: '/dashboard/uoitiput?mode=chat' },
-      { label: 'Przeglądaj', path: '/dashboard/uoitiput?mode=browse' }
-    ]
-  },
-  {
-    IconComponent: Bot,
     label: 'Czat z KPA',
     path: '/dashboard/kpa',
     subItems: [
