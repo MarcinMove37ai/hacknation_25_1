@@ -24,7 +24,7 @@ model Decision {
   filePath         String?  @map("file_path")
   createdAt        DateTime @default(now()) @map("created_at")
   status           String?  @map("status")
-
+  url              String?  @map("url")
   // --- Nowe kolumny ---
 
   // Długi tekst (odpowiednik TEXT w SQL)

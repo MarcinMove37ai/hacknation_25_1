@@ -1,20 +1,36 @@
-// src/app/api/decisions/process/route.ts
+//D:\hacknation_25\hacknation_25\src\app\api\decisions\process\route.ts
+// ✅ ULEPSZONA WERSJA Z DEBUGOWANIEM
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import path from 'path';
 
-// Interfejs dla odpowiedzi z API Anthropic
+function normalizeFilename(filename: string): string {
+  const extension = path.extname(filename);
+  const nameWithoutExt = path.basename(filename, extension);
+
+  const charMap: Record<string, string> = {
+    'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+    'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z'
+  };
+
+  const normalizedName = nameWithoutExt
+    .split('')
+    .map(char => charMap[char] || char)
+    .join('')
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '');
+
+  return `${normalizedName}${extension}`;
+}
+
 interface AnthropicResponse {
-  content: Array<{
-    text: string;
-    type: string;
-  }>;
+  content: Array<{ text: string; type: string; }>;
   id: string;
   model: string;
   role: string;
   type: string;
 }
 
-// Interfejs dla danych decyzji
 interface DecisionData {
   documentDate: string;
   decisionNumber: string;
@@ -26,12 +42,10 @@ interface DecisionData {
   signedBy: string;
   filePath: string;
   status: string;
-  // Nowe pola
   decisionText: string;
   organizator: string;
 }
 
-// Funkcja do wywołania API Anthropic
 async function callAnthropicAPI(apiKey: string, prompt: string, model: string): Promise<AnthropicResponse> {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -43,147 +57,134 @@ async function callAnthropicAPI(apiKey: string, prompt: string, model: string): 
     body: JSON.stringify({
       model: model,
       max_tokens: 4000,
-      messages: [
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
+      messages: [{ role: "user", content: prompt }]
     })
   });
 
   if (!response.ok) {
     const errorData = await response.json();
     console.error('Błąd API Anthropic:', errorData);
-    // Rzucamy błąd z konkretną informacją z API
     throw new Error(`API Anthropic error (${response.status}): ${JSON.stringify(errorData)}`);
   }
-
   return response.json();
 }
 
-// Funkcja do parsowania odpowiedzi JSON
 function parseJSONFromResponse(responseText: string): DecisionData {
-  // Próba bezpośredniego parsowania
   try {
     return JSON.parse(responseText.trim());
   } catch (error) {
-    console.log('Bezpośrednie parsowanie JSON nie powiodło się, szukam w bloku markdown');
-
-    // Szukanie JSON w bloku markdown
+    console.log('Parsowanie bezpośrednie nieudane, szukam bloku markdown...');
     const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     if (jsonMatch && jsonMatch[1]) {
-      try {
-        return JSON.parse(jsonMatch[1].trim());
-      } catch (jsonError) {
-        console.error('Nie udało się sparsować JSON z bloku kodu:', jsonError);
-        throw new Error('Nie udało się sparsować JSON z bloku kodu');
-      }
+      return JSON.parse(jsonMatch[1].trim());
     } else {
-      console.error('Nie znaleziono bloku kodu JSON w odpowiedzi');
-      throw new Error('Nie udało się wyodrębnić poprawnego JSON z odpowiedzi');
+      throw new Error('Nie udało się wyodrębnić poprawnego JSON z odpowiedzi AI');
     }
   }
 }
 
-// GŁÓWNY HANDLER POST
 export async function POST(request: NextRequest) {
   try {
-    // 1. Pobranie danych z requestu
     const body = await request.json();
     const { documentText, fileName } = body;
 
+    // 🔍 DEBUG - Start procesu
+    console.log('═══════════════════════════════════════════════');
+    console.log('🚀 START PRZETWARZANIA DECYZJI');
+    console.log('═══════════════════════════════════════════════');
+
     if (!documentText) {
-      return NextResponse.json({
-        error: 'Nie podano tekstu dokumentu do przetworzenia.'
-      }, { status: 400 });
+      console.error('❌ Brak tekstu dokumentu w request body');
+      return NextResponse.json({ error: 'Brak tekstu dokumentu.' }, { status: 400 });
     }
 
-    console.log('📄 Rozpoczynam przetwarzanie dokumentu odwołania...');
-    console.log('📝 Długość tekstu:', documentText.length, 'znaków');
-    if (fileName) {
-      console.log('📁 Nazwa pliku:', fileName);
-    }
+    // 🔍 DEBUG - Dane wejściowe
+    console.log('📥 Dane wejściowe:');
+    console.log('  - fileName z requestu:', fileName || '❌ BRAK');
+    console.log('  - Długość tekstu:', documentText.length, 'znaków');
 
-    // 2. Definicja modelu AI - POPRAWNY MODEL
-    const AI_MODEL = process.env.PREMIUM_AI_MODEL || 'claude-sonnet-4-5';
+    const AI_MODEL = process.env.PREMIUM_AI_MODEL || 'claude-sonnet-4-20250514';
+    console.log('🤖 Model AI:', AI_MODEL);
 
-    // 3. Utworzenie prompta dla Claude
-    const prompt = `Jesteś ekspertem od analizy dokumentów prawnych. Przeanalizuj poniższy dokument odwołania od decyzji Marszałka Województwa dotyczący naruszenia przepisów o organizatorach turystyki.
-
-Wyciągnij kluczowe informacje oraz wygeneruj dodatkowe dane (fikcyjny organizator) i zwróć wszystko w formacie JSON (tylko czysty JSON, bez żadnego dodatkowego tekstu).
+    const prompt = `Jesteś ekspertem od analizy dokumentów prawnych. Przeanalizuj poniższy dokument odwołania.
+Wyciągnij kluczowe informacje i zwróć JSON.
 
 Oczekiwany format JSON:
 {
-  "documentDate": "Data dokumentu w formacie YYYY-MM-DD",
-  "decisionNumber": "Numer sprawy/decyzji (np. KP-TP-III.5222.7.16.2022.EL)",
+  "documentDate": "YYYY-MM-DD",
+  "decisionNumber": "Numer decyzji",
   "banYears": 3,
-  "legalBasisKpa": "Pełna podstawa prawna z Kodeksu postępowania administracyjnego",
-  "legalBasisUitput": "Pełna podstawa prawna z ustawy o imprezach turystycznych",
+  "legalBasisKpa": "Podstawa KPA",
+  "legalBasisUitput": "Podstawa Ustawa",
   "appealDays": 30,
-  "appealCourt": "Pełna nazwa i adres organu odwoławczego (MINISTERSTWO SPORTU I TURYSTYKI + adres)",
-  "signedBy": "Osoba podpisująca dokument z pełnym stanowiskiem",
-  "filePath": "${fileName || 'dokument.pdf'}",
-  "status": "nowy",
-  "organizator": "Fikcyjna Nazwa Biura Podróży (mock)",
-  "decisionText": "Treść decyzji do embeddingu"
+  "appealCourt": "Organ odwoławczy",
+  "signedBy": "Podpisany przez",
+  "filePath": "${fileName || 'unknown.pdf'}",
+  "status": "new",
+  "organizator": "Fikcyjna Nazwa (mock)",
+  "decisionText": "Treść merytoryczna"
 }
 
-INSTRUKCJE SZCZEGÓŁOWE:
-1. Dane podstawowe:
-   - "appealDays": zawsze 30
-   - "status": zawsze "nowy"
-   - "banYears": zazwyczaj 3 (sprawdź w tekście)
-   - Data: format YYYY-MM-DD
+INSTRUKCJE:
+1. "organizator": wymyśl nazwę z dopiskiem "(mock)".
+2. "decisionText": czysty tekst bez nagłówków/stopek.
+3. Zwróć TYLKO JSON.
 
-2. Pole "organizator":
-   - Dokumenty są zanonimizowane. Wymyśl losową, wiarygodnie brzmiącą nazwę biura podróży lub organizatora turystyki (np. "Słoneczne Podróże Sp. z o.o.").
-   - KONIECZNIE dodaj na końcu nazwy dopisek "(mock)". Przykład: "Global Travel Polska (mock)".
-
-3. Pole "decisionText":
-   - Wygeneruj czysty tekst merytorycznej części decyzji/odwołania.
-   - Usuń nagłówki techniczne, stopki, daty i sygnatury z początku dokumentu.
-   - Tekst ma być ciągły i czytelny, przygotowany do wektoryzacji (embeddingu).
-
-4. Format:
-   - Zwróć TYLKO poprawny obiekt JSON. Nie dodawaj "Oto wynik:" ani bloków markdown, jeśli nie musisz.
-
-DOKUMENT DO ANALIZY:
-
+DOKUMENT:
 ${documentText}`;
 
-    // 4. Pobranie klucza API Anthropic
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     if (!anthropicApiKey) {
-      console.error('Brak klucza API Anthropic w zmiennych środowiskowych');
-      return NextResponse.json({
-        error: 'Konfiguracja serwera nieprawidłowa. Skontaktuj się z administratorem.'
-      }, { status: 500 });
+      console.error('❌ Brak ANTHROPIC_API_KEY');
+      return NextResponse.json({ error: 'Brak klucza API' }, { status: 500 });
     }
 
-    // 5. Wywołanie API Anthropic
-    console.log('🤖 Wysyłanie żądania do API Anthropic...');
-    console.log(`🤖 Używam modelu: ${AI_MODEL}`);
+    // Wywołanie AI
+    console.log('🧠 Wysyłanie do API Anthropic...');
     const apiResponse = await callAnthropicAPI(anthropicApiKey, prompt, AI_MODEL);
-    console.log('✅ Otrzymano odpowiedź z API Anthropic');
+    console.log('✅ Otrzymano odpowiedź z API');
 
-    // 6. Parsowanie odpowiedzi JSON
     let decisionData: DecisionData;
-
     if (apiResponse.content && apiResponse.content.length > 0) {
-      const responseText = apiResponse.content[0].text;
-      console.log('📋 Surowa odpowiedź AI (fragment):', responseText.substring(0, 100) + '...');
-      decisionData = parseJSONFromResponse(responseText);
-      console.log('✅ Pomyślnie sparsowano odpowiedź JSON');
+      decisionData = parseJSONFromResponse(apiResponse.content[0].text);
+      console.log('✅ JSON sparsowany pomyślnie');
     } else {
-      console.error('❌ Nieprawidłowy format odpowiedzi z API Anthropic');
-      throw new Error('Nieprawidłowy format odpowiedzi z API Anthropic');
+      throw new Error('Pusta odpowiedź z API');
     }
 
-    // 7. Zapisanie do bazy danych
-    console.log('💾 Zapisywanie do bazy danych...');
+    // 🔍 DEBUG - Budowanie URL
+    console.log('───────────────────────────────────────────────');
+    console.log('🔗 BUDOWANIE URL DO PLIKU:');
 
-    // Pole 'embedding' w bazie danych pozostaje puste/null.
+    const appUrl = process.env.APP_URL || 'http://localhost:3000';
+    console.log('  1. APP_URL:', appUrl);
+
+    let finalFileName = fileName || decisionData.filePath || 'unknown.pdf';
+    console.log('  2. fileName (przed normalize):', finalFileName);
+
+    finalFileName = normalizeFilename(finalFileName);
+    console.log('  3. fileName (po normalize):', finalFileName);
+
+    const publicUrl = `${appUrl}/api/assets/${finalFileName}`;
+    console.log('  4. 🎯 FINAL URL:', publicUrl);
+
+    // Sprawdzenie czy plik istnieje na dysku
+    const uploadDir = process.env.UPLOAD_DIR || '/app/uploads';
+    const diskPath = path.join(uploadDir, finalFileName);
+    console.log('  5. Ścieżka na dysku:', diskPath);
+
+    const { existsSync } = await import('fs');
+    const fileExists = existsSync(diskPath);
+    console.log('  6. Czy plik istnieje:', fileExists ? '✅ TAK' : '❌ NIE');
+
+    if (!fileExists) {
+      console.warn('⚠️  UWAGA: Plik nie istnieje na dysku! URL będzie prowadzić do 404');
+    }
+
+    console.log('───────────────────────────────────────────────');
+
+    // Zapis do bazy
+    console.log('💾 Zapisywanie do bazy danych...');
     const decision = await prisma.decision.create({
       data: {
         documentDate: decisionData.documentDate,
@@ -194,65 +195,38 @@ ${documentText}`;
         appealDays: decisionData.appealDays,
         appealCourt: decisionData.appealCourt,
         signedBy: decisionData.signedBy,
-        filePath: decisionData.filePath,
+        filePath: finalFileName,
+        url: publicUrl,
         status: decisionData.status,
-        // Nowe pola
         decisionText: decisionData.decisionText,
-        organizator: decisionData.organizator
+        organizator: decisionData.organizator,
       }
     });
 
-    console.log(`✅ Pomyślnie utworzono rekord decyzji z ID: ${decision.id}`);
+    console.log('✅ Zapisano do bazy z ID:', decision.id);
+    console.log('═══════════════════════════════════════════════');
+    console.log('🎉 PROCES ZAKOŃCZONY SUKCESEM');
+    console.log('═══════════════════════════════════════════════');
 
-    // 8. Zwrócenie sukcesu
     return NextResponse.json({
       success: true,
-      message: 'Dokument został pomyślnie przetworzony i zapisany',
       decisionId: decision.id,
-      decisionNumber: decision.decisionNumber,
+      fileUrl: publicUrl,
       data: decisionData
     }, { status: 201 });
 
   } catch (error) {
-    console.error('❌ Błąd podczas przetwarzania dokumentu:', error);
+    console.error('═══════════════════════════════════════════════');
+    console.error('❌ BŁĄD PODCZAS PRZETWARZANIA');
+    console.error('═══════════════════════════════════════════════');
+    console.error(error);
+    console.error('═══════════════════════════════════════════════');
 
-    // Rozróżnienie typów błędów
-    if (error instanceof Error) {
-      // Obsługa błędów API
-      if (error.message.includes('API Anthropic')) {
-        return NextResponse.json({
-          error: `Błąd API AI: ${error.message}`
-        }, { status: 503 });
-      }
-
-      if (error.message.includes('JSON')) {
-        return NextResponse.json({
-          error: 'Błąd przetwarzania odpowiedzi AI (niepoprawny JSON).'
-        }, { status: 500 });
-      }
-
-      return NextResponse.json({
-        error: error.message
-      }, { status: 500 });
-    }
-
-    return NextResponse.json({
-      error: 'Wystąpił nieoczekiwany błąd podczas przetwarzania dokumentu.'
-    }, { status: 500 });
+    const msg = error instanceof Error ? error.message : 'Nieznany błąd';
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
-// Opcjonalnie: GET endpoint do testowania
 export async function GET() {
-  return NextResponse.json({
-    message: 'Endpoint do przetwarzania dokumentów odwołań',
-    usage: {
-      method: 'POST',
-      contentType: 'application/json',
-      body: {
-        documentText: 'string (wymagane)',
-        fileName: 'string (opcjonalne)'
-      }
-    }
-  });
+  return NextResponse.json({ status: 'active' });
 }

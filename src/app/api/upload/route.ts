@@ -1,7 +1,29 @@
+// D:\hacknation_25\hacknation_25\src\app\api\upload\route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
+
+// --- DODAJ TĘ FUNKCJĘ ---
+function normalizeFilename(filename: string): string {
+  const extension = path.extname(filename);
+  const nameWithoutExt = path.basename(filename, extension);
+
+  const charMap: Record<string, string> = {
+    'ą': 'a', 'ć': 'c', 'ę': 'e', 'ł': 'l', 'ń': 'n', 'ó': 'o', 'ś': 's', 'ź': 'z', 'ż': 'z',
+    'Ą': 'A', 'Ć': 'C', 'Ę': 'E', 'Ł': 'L', 'Ń': 'N', 'Ó': 'O', 'Ś': 'S', 'Ź': 'Z', 'Ż': 'Z'
+  };
+
+  const normalizedName = nameWithoutExt
+    .split('')
+    .map(char => charMap[char] || char)
+    .join('')
+    .replace(/\s+/g, '_')             // Spacje na _
+    .replace(/[^a-zA-Z0-9._-]/g, ''); // Usuń resztę dziwnych znaków
+
+  return `${normalizedName}${extension}`;
+}
+// ------------------------
 
 // Ścieżka do volume na Railway - dostosuj do swojej konfiguracji
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/app/uploads';
@@ -49,8 +71,9 @@ export async function POST(request: NextRequest) {
 
     // Generowanie bezpiecznej nazwy pliku z timestampem
     const timestamp = Date.now();
-    const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const fileName = `${timestamp}_${sanitizedFileName}`;
+    // Używamy nowej funkcji normalizującej
+    const cleanName = normalizeFilename(file.name);
+    const fileName = `${timestamp}_${cleanName}`;
     const filePath = path.join(UPLOAD_DIR, fileName);
 
     // Konwersja pliku do bufora i zapis

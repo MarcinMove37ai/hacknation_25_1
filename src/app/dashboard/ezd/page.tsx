@@ -92,8 +92,8 @@ export default function EzdSimulatorPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          documentText: extractedText, // Przekazujemy tekst odczytany w kroku 1
-          fileName: file.name
+          documentText: extractedText,
+          fileName: uploadData.file.savedAs  // ✅ To ma timestamp z uploadu
         }),
       });
 
