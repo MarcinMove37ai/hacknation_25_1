@@ -91,8 +91,6 @@ interface DecisionStats {
 }
 
 const getMenuItems = (lang: 'pl', stats?: DecisionStats): MenuItem[] => [
-  { IconComponent: Home, label: 'Dashboard', path: '/dashboard', fullWidth: true },
-
    {
     IconComponent: FileText,  // możesz zmienić ikonę
     label: 'AI Powered OCR',
@@ -424,7 +422,7 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
         {/* Logo na desktop - po lewej, klikalny */}
         {!isMobile && (
           <Link
-            href="/dashboard"
+            href="/dashboard/ocr"
             className="ml-0 cursor-pointer group"
           >
             <div className="flex items-center">
@@ -692,14 +690,14 @@ const DashboardLayoutWithProvider: React.FC<DashboardLayoutProps> = (props) => {
           <div className="text-center space-y-6">
             {/* Klikalne logo */}
             <Link
-              href="/dashboard"
+              href="/dashboard/ocr"
               className="inline-block group cursor-pointer transition-all duration-300 hover:scale-105"
             >
               <h1 className="text-6xl font-bold text-blue-900 transition-colors duration-300 group-hover:text-blue-700">
                 move<span className="font-light">37th</span>
               </h1>
               <p className="text-gray-500 text-sm mt-2 transition-colors duration-300 group-hover:text-gray-700">
-                Kliknij aby wrócić do Dashboard
+                AI Powered OCR
               </p>
             </Link>
 
