@@ -92,21 +92,11 @@ interface DecisionStats {
 
 const getMenuItems = (lang: 'pl', stats?: DecisionStats): MenuItem[] => [
   { IconComponent: Home, label: 'Dashboard', path: '/dashboard', fullWidth: true },
-  {
-    IconComponent: FileText,
-    label: 'Postępowania (EZD)',
-    path: '/dashboard/cases',
-    subItems: [
-      { label: 'Wszystkie', path: '/dashboard/cases', count: stats?.total || 0, statusKey: 'total' },
-      { label: 'W toku', path: '/dashboard/cases?status=in_progress', count: stats?.in_progress || 0, statusKey: 'in_progress' },
-      { label: 'Do wyjaśnienia', path: '/dashboard/cases?status=pending', count: stats?.pending || 0, statusKey: 'pending' },
-      { label: 'Zakończone', path: '/dashboard/cases?status=closed', count: stats?.closed || 0, statusKey: 'closed' }
-    ]
-  },
-  {
-    IconComponent: Library,
-    label: 'Baza decyzji',
-    path: '/dashboard/decision'
+
+   {
+    IconComponent: FileText,  // możesz zmienić ikonę
+    label: 'AI Powered OCR',
+    path: '/dashboard/ocr'
   },
   {
     IconComponent: Bot,
@@ -118,8 +108,8 @@ const getMenuItems = (lang: 'pl', stats?: DecisionStats): MenuItem[] => [
 const getCurrentPageLabel = (path: string | null, lang: 'pl' = 'pl') => {
   if (!path) return 'Dashboard';
 
-  if (path.includes('/dashboard/ezd')) {
-    return 'Symulator EZD PUW';
+  if (path.includes('/dashboard/ocr')) {
+    return 'AI Powered OCR';
   }
 
   const menuItems = getMenuItems(lang);
@@ -367,7 +357,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
   if (isMobile) {
     if (!isClient) return null;
     return (
-      <div className={`fixed left-0 z-50 top-16 bottom-1 w-72 bg-white/95 backdrop-blur-xl backdrop-saturate-150 shadow-2xl rounded-r-3xl transition-all duration-300 ease-out overflow-y-auto border-r border-gray-100 ${isMobileMenuOpen ? 'transform translate-x-0' : 'transform -translate-x-full'}`} style={{ boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }}>
+      <div className={`fixed left-0 z-50 top-25 bottom-1 w-72 bg-white/95 backdrop-blur-xl backdrop-saturate-150 shadow-2xl rounded-r-3xl transition-all duration-300 ease-out overflow-y-auto border-r border-gray-100 ${isMobileMenuOpen ? 'transform translate-x-0' : 'transform -translate-x-full'}`} style={{ boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)' }}>
         <div className="flex flex-col h-full">
           <nav className="flex-1 py-6">
             <ul className="space-y-2 px-4">
@@ -381,7 +371,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentLang }) => {
 
   return (
     <div
-      className={`fixed left-0 z-40 top-16 h-[calc(100vh-4rem)] bg-white shadow-xl rounded-r-3xl overflow-hidden backdrop-blur-sm transition-all duration-300 ease-out border-r border-gray-100 ${hoveredSidebar ? 'w-73' : 'w-20'}`}
+      className={`fixed left-0 z-40 top-25 h-[calc(100vh-6.25rem)] bg-white shadow-xl rounded-r-3xl overflow-hidden backdrop-blur-sm transition-all duration-300 ease-out border-r border-gray-100 ${hoveredSidebar ? 'w-73' : 'w-20'}`}
       onMouseEnter={() => !isMobile && setHoveredSidebar(true)}
       onMouseLeave={() => !isMobile && setHoveredSidebar(false)}
       style={{ transform: 'translateX(0)', boxShadow: hoveredSidebar ? '0 25px 50px -12px rgba(0, 0, 0, 0.15), 0 10px 20px -5px rgba(0, 0, 0, 0.1)' : '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)' }}
@@ -420,54 +410,57 @@ const Header: React.FC<HeaderProps> = ({ currentLang, langReady }) => {
   }, []);
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-16 bg-white shadow-sm border-b border-gray-200 z-50 flex items-center pr-6" style={{ paddingLeft: isMobile || !isScreenSizeDetected ? '1rem' : '1rem', transition: 'padding-left 0.3s ease-out' }}>
+    <header className="fixed top-0 left-0 right-0 h-25 bg-white shadow-sm border-b border-gray-200 z-50 flex items-center justify-between px-4 md:px-6" style={{ transition: 'padding 0.3s ease-out' }}>
+      {/* Lewa strona - tylko hamburger na mobile */}
       <div className="flex items-center flex-shrink-0">
         {isMobile && isScreenSizeDetected && (
-          <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="mr-4 p-2.5 hover:bg-gray-100 rounded-xl transition-all duration-200 cursor-pointer hover:scale-105 active:scale-95">
+          <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2.5 hover:bg-gray-100 rounded-xl transition-all duration-200 cursor-pointer hover:scale-105 active:scale-95">
             <div className="relative w-6 h-6">
               {isMobileMenuOpen ? (isClient && <X className="h-6 w-6 text-gray-600 transition-transform duration-200 rotate-0 hover:rotate-90" />) : (isClient && <Menu className="h-6 w-6 text-gray-600 transition-transform duration-200" />)}
             </div>
           </button>
         )}
 
-        <Link
-          href="/dashboard"
-          className="mr-4 cursor-pointer group"
-        >
-          <div className="flex items-center">
-            <div className="h-12 w-auto bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-center px-3 py-2 transition-all duration-200 group-hover:shadow-xl group-hover:scale-105">
-              <img src="/logo.webp" alt="Logo" className="h-full w-auto object-contain" />
+        {/* Logo na desktop - po lewej, klikalny */}
+        {!isMobile && (
+          <Link
+            href="/dashboard"
+            className="ml-0 cursor-pointer group"
+          >
+            <div className="flex items-center">
+              <div className="h-20 w-auto bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-center px-3 py-2 transition-all duration-200 group-hover:shadow-xl group-hover:scale-105">
+                <img src="/logo.webp" alt="Logo" className="h-full w-auto object-contain" />
+              </div>
             </div>
-          </div>
-        </Link>
+          </Link>
+        )}
       </div>
 
+      {/* Środek - tekst "Zadanie od MSiT" */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[100]">
-         <div className="hidden md:block border-b-2 border-red-600 pb-0.5 bg-white/90 px-24 text-center">
+         <div className="hidden md:block border-b-2 border-red-600 pb-0.5 bg-white/90 px-6 lg:px-8 text-center">
             <span className="font-normal text-gray-600 mr-1">
-               Zadanie od MSiT:
+               Przydatne narzędzia:
             </span>
             <span className="font-bold text-gray-900">
-               AI W SŁUŻBIE DECYZJI
+               dla Drużyny AI JAM ŁDZ
             </span>
          </div>
       </div>
-      <div className="flex-1"></div>
+
+      {/* Prawa strona */}
       <div className="flex items-center space-x-4">
+        {/* Logo na mobile - po prawej, NIE klikalny */}
+        {isMobile && isScreenSizeDetected && (
+          <div className="flex items-center">
+            <div className="h-20 w-auto bg-white rounded-xl shadow-lg border border-gray-200 flex items-center justify-center px-3 py-2">
+              <img src="/logo.webp" alt="Logo" className="h-full w-auto object-contain" />
+            </div>
+          </div>
+        )}
 
-        <Link
-          href="/dashboard/ezd"
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`hidden md:block px-4 py-2 bg-gray-50 rounded-xl border border-gray-200 shadow-sm transition-all font-['Poppins'] text-sm font-medium text-gray-800
-            ${isEzdPage ? 'cursor-default' : 'hover:bg-gray-100 hover:shadow-md cursor-pointer hover:scale-105'}`
-          }
-          onClick={(e) => isEzdPage && e.preventDefault()}
-        >
-           Symulator EZD
-        </Link>
-
-        {isClient && (
+        {/* Marcin Lisiak - tylko desktop */}
+        {!isMobile && isClient && (
           !isEzdPage ? (
             <a href="https://www.linkedin.com/in/move37th/" target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer hover:scale-105">
               <div className="flex items-center gap-2 font-['Poppins']">
@@ -633,13 +626,13 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               : 'ml-20'
         }`}
           style={{
-            paddingTop: '64px',
+            paddingTop: '100px',
             height: '100vh'
           }}
         >
           <Header currentLang={currentLang} langReady={langReady} />
 
-          <main className="flex-1 px-2 pb-4 pt-1.5 overflow-auto bg-gray-100 relative">
+          <main className="flex-1 px-1 min-[360px]:px-1.5 sm:px-2 pb-4 pt-1.5 overflow-auto bg-gray-100 relative">
             {isNavigating && (
               <div className="absolute inset-0 z-30 bg-white/80 backdrop-blur-sm flex items-center justify-center rounded-xl">
                 <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-purple-600 border-r-transparent"></div>
@@ -649,7 +642,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
             {!isFullWidthPage && !disableMenu && (
               <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-2 transition-all duration-300">
                 <div className="flex flex-row items-center w-full md:w-auto gap-3">
-                  <div className="bg-white px-3 py-1.5 md:px-5 md:py-3 rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200">
+                  <div className="bg-white px-2 py-1.5 min-[360px]:px-2.5 sm:px-3 md:px-5 md:py-3 rounded-xl shadow-sm border border-gray-200 hover:shadow-md transition-shadow duration-200">
                     <h2 className="text-base md:text-xl font-semibold text-gray-700 whitespace-nowrap">
                       {getCurrentPageLabel(pathname, currentLang)}
                     </h2>
@@ -679,7 +672,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 ? 'bg-gray-100 p-0 h-full'
                 : isFullWidthPage || disableMenu
                   ? 'bg-white rounded-xl shadow-sm p-0 h-full overflow-hidden border border-gray-200 hover:shadow-md'
-                  : 'bg-white rounded-xl shadow-sm p-6 md:p-8 h-full border border-gray-200 hover:shadow-md'
+                  : 'bg-white rounded-xl shadow-sm p-2 min-[360px]:p-3 sm:p-4 md:p-8 h-full border border-gray-200 hover:shadow-md'
               }`}
             >
               {children}

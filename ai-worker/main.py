@@ -1,6 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from paddleocr import PaddleOCR
 from pdf2image import convert_from_bytes
+from PIL import Image
+import io
 import numpy as np
 import cv2
 import uvicorn
@@ -46,32 +48,56 @@ def health_check():
 
 @app.post("/ocr")
 async def ocr_process(file: UploadFile = File(...)):
-    if file.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    # NOWA walidacja
+    allowed_types = [
+        "application/pdf",
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ]
+
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Niedozwolony typ pliku. Akceptowane: PDF, PNG, JPG, DOC, DOCX"
+        )
 
     try:
         contents = await file.read()
-
-        # Konwersja PDF -> Obrazy
-        images = convert_from_bytes(
-            contents,
-            dpi=300,
-            poppler_path=r"D:\Pobrane\Release-25.12.0-0\poppler-25.12.0\Library\bin"
-        )
-
         full_text = ""
 
-        # BATCH PROCESSING - wszystkie strony naraz dla GPU
+        # PDF - konwersja na obrazy
+        if file.content_type == "application/pdf":
+            images = convert_from_bytes(
+                contents,
+                dpi=300,
+                poppler_path=r"D:\Pobrane\Release-25.12.0-0\poppler-25.12.0\Library\bin"
+            )
+
+        # PNG/JPG - bezpośrednio
+        elif file.content_type in ["image/png", "image/jpeg", "image/jpg"]:
+            img = Image.open(io.BytesIO(contents))
+            images = [img]
+
+        # DOC/DOCX - wymagana dodatkowa biblioteka
+        elif file.content_type in ["application/msword",
+                                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+            raise HTTPException(
+                status_code=501,
+                detail="DOC/DOCX nie jest jeszcze obsługiwany - tylko PDF i obrazy"
+            )
+
+        # OCR dla wszystkich obrazów
         print(f"🔄 Przetwarzanie {len(images)} stron...")
 
         for i, img in enumerate(images):
             print(f"  📄 Strona {i + 1}/{len(images)}")
 
-            # Konwersja PIL -> OpenCV (bez preprocessingu CPU!)
             img_np = np.array(img)
             img_np = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
 
-            # OCR BEZPOŚREDNIO na GPU (bez CPU preprocessing)
             result = ocr.ocr(img_np, cls=True)
 
             page_text = ""

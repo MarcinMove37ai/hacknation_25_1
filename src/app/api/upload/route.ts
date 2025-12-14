@@ -43,6 +43,9 @@ export async function POST(request: NextRequest) {
     // Walidacja typu pliku
     const allowedTypes = [
       'application/pdf',
+      'image/png',
+      'image/jpeg',
+      'image/jpg',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'text/plain'
@@ -50,7 +53,7 @@ export async function POST(request: NextRequest) {
 
     if (!allowedTypes.includes(file.type)) {
       return NextResponse.json(
-        { error: 'Niedozwolony typ pliku. Akceptowane: PDF, DOC, DOCX, TXT' },
+        { error: 'Niedozwolony typ pliku. Akceptowane: PDF, PNG, JPG, DOC, DOCX, TXT' },
         { status: 400 }
       );
     }
@@ -81,9 +84,9 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
     await writeFile(filePath, buffer);
 
-    // Wysłanie pliku do Python OCR API (tylko dla PDF)
+    // Wysłanie pliku do Python OCR API (dla PDF i obrazów)
     let ocrResult = null;
-    if (file.type === 'application/pdf') {
+    if (file.type === 'application/pdf' || file.type.startsWith('image/')) {
       try {
         // URL do Python OCR API - ustaw w zmiennych środowiskowych Railway
         const pythonApiUrl = process.env.PYTHON_OCR_API_URL || 'http://localhost:8000';
@@ -99,11 +102,25 @@ export async function POST(request: NextRequest) {
         const ocrResponse = await fetch(`${pythonApiUrl}/ocr`, {
           method: 'POST',
           body: ocrFormData,
+          headers: {
+            'ngrok-skip-browser-warning': 'true'
+          }
         });
 
         if (ocrResponse.ok) {
           ocrResult = await ocrResponse.json();
           console.log('✅ OCR zakończone pomyślnie');
+
+          // NOWE: Zapisz jako TXT - dla wszystkich typów
+          const fileExt = path.extname(fileName); // .pdf, .png, .jpg
+          const txtFileName = fileName.replace(fileExt, '.txt');
+          const txtFilePath = path.join(UPLOAD_DIR, txtFileName);
+
+          await writeFile(txtFilePath, ocrResult.text, 'utf-8');
+          console.log('💾 Zapisano plik TXT:', txtFileName);
+
+          ocrResult.txtFile = txtFileName; // Dodaj nazwę pliku do odpowiedzi
+
           console.log('📄 Rozpoznany tekst:', ocrResult.text);
         } else {
           const errorText = await ocrResponse.text();
