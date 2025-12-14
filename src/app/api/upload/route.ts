@@ -4,7 +4,6 @@ import { writeFile, mkdir } from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
 
-// --- DODAJ TĘ FUNKCJĘ ---
 function normalizeFilename(filename: string): string {
   const extension = path.extname(filename);
   const nameWithoutExt = path.basename(filename, extension);
@@ -18,14 +17,12 @@ function normalizeFilename(filename: string): string {
     .split('')
     .map(char => charMap[char] || char)
     .join('')
-    .replace(/\s+/g, '_')             // Spacje na _
-    .replace(/[^a-zA-Z0-9._-]/g, ''); // Usuń resztę dziwnych znaków
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '');
 
   return `${normalizedName}${extension}`;
 }
-// ------------------------
 
-// Ścieżka do volume na Railway - dostosuj do swojej konfiguracji
 const UPLOAD_DIR = process.env.UPLOAD_DIR || '/app/uploads';
 
 export async function POST(request: NextRequest) {
@@ -34,137 +31,144 @@ export async function POST(request: NextRequest) {
     const file = formData.get('file') as File;
 
     if (!file) {
-      return NextResponse.json(
-        { error: 'Brak pliku w żądaniu' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Brak pliku' }, { status: 400 });
     }
 
     // Walidacja typu pliku
-    const allowedTypes = [
-      'application/pdf',
-      'image/png',
-      'image/jpeg',
-      'image/jpg',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'text/plain'
-    ];
-
+    const allowedTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'];
     if (!allowedTypes.includes(file.type)) {
-      return NextResponse.json(
-        { error: 'Niedozwolony typ pliku. Akceptowane: PDF, PNG, JPG, DOC, DOCX, TXT' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Niedozwolony typ pliku' }, { status: 400 });
     }
 
     // Walidacja rozmiaru (max 10MB)
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSize) {
-      return NextResponse.json(
-        { error: 'Plik jest za duży. Maksymalny rozmiar: 10MB' },
-        { status: 400 }
-      );
+    if (file.size > 10 * 1024 * 1024) {
+      return NextResponse.json({ error: 'Plik za duży (max 10MB)' }, { status: 400 });
     }
 
-    // Utworzenie katalogu jeśli nie istnieje
+    // Zapisz plik
     if (!existsSync(UPLOAD_DIR)) {
       await mkdir(UPLOAD_DIR, { recursive: true });
     }
 
-    // Generowanie bezpiecznej nazwy pliku z timestampem
     const timestamp = Date.now();
-    // Używamy nowej funkcji normalizującej
     const cleanName = normalizeFilename(file.name);
     const fileName = `${timestamp}_${cleanName}`;
     const filePath = path.join(UPLOAD_DIR, fileName);
 
-    // Konwersja pliku do bufora i zapis
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
     await writeFile(filePath, buffer);
 
-    // Wysłanie pliku do Python OCR API (dla PDF i obrazów)
-    let ocrResult = null;
+    console.log(`✅ Plik zapisany: ${fileName}`);
+
+    // STREAMING OCR
     if (file.type === 'application/pdf' || file.type.startsWith('image/')) {
+      const pythonApiUrl = process.env.PYTHON_OCR_API_URL || 'http://localhost:8000';
+
+      const ocrFormData = new FormData();
+      const fileBlob = new Blob([buffer], { type: file.type });
+      ocrFormData.append('file', fileBlob, file.name);
+
+      console.log(`📡 Streaming OCR: ${pythonApiUrl}/ocr-stream`);
+
       try {
-        // URL do Python OCR API - ustaw w zmiennych środowiskowych Railway
-        const pythonApiUrl = process.env.PYTHON_OCR_API_URL || 'http://localhost:8000';
-
-        // Utworzenie FormData z plikiem
-        const ocrFormData = new FormData();
-        const fileBlob = new Blob([buffer], { type: file.type });
-        ocrFormData.append('file', fileBlob, file.name);
-
-        console.log(`Wysyłanie pliku do OCR API: ${pythonApiUrl}/ocr`);
-
-        // Wysłanie do Python API
-        const ocrResponse = await fetch(`${pythonApiUrl}/ocr`, {
+        // Fetch streaming endpoint
+        const ocrResponse = await fetch(`${pythonApiUrl}/ocr-stream`, {
           method: 'POST',
           body: ocrFormData,
-          headers: {
-            'ngrok-skip-browser-warning': 'true'
+          headers: { 'ngrok-skip-browser-warning': 'true' }
+        });
+
+        if (!ocrResponse.ok) {
+          throw new Error(`OCR API error: ${ocrResponse.status}`);
+        }
+
+        // Czytaj stream i zapisz ostatni tekst
+        const reader = ocrResponse.body?.getReader();
+        const decoder = new TextDecoder();
+        let finalText = '';
+        let lastProgress = { current: 0, total: 0 };
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.substring(6));
+
+                  console.log(`📊 Progress: ${JSON.stringify(data)}`);
+
+                  if (data.status === 'page') {
+                    lastProgress = { current: data.current, total: data.total };
+                  }
+
+                  if (data.status === 'done') {
+                    finalText = data.text;
+                  }
+                } catch (e) {
+                  // Ignore parse errors
+                }
+              }
+            }
+          }
+        }
+
+        // Zapisz jako TXT
+        const fileExt = path.extname(fileName);
+        const txtFileName = fileName.replace(fileExt, '.txt');
+        const txtFilePath = path.join(UPLOAD_DIR, txtFileName);
+
+        await writeFile(txtFilePath, finalText, 'utf-8');
+        console.log(`💾 Zapisano TXT: ${txtFileName}`);
+
+        return NextResponse.json({
+          success: true,
+          message: 'OCR zakończone',
+          file: {
+            name: file.name,
+            savedAs: fileName,
+            size: file.size,
+            type: file.type,
+            uploadedAt: new Date().toISOString()
+          },
+          ocr: {
+            text: finalText,
+            txtFile: txtFileName,
+            pagesProcessed: lastProgress.total
           }
         });
 
-        if (ocrResponse.ok) {
-          ocrResult = await ocrResponse.json();
-          console.log('✅ OCR zakończone pomyślnie');
-
-          // NOWE: Zapisz jako TXT - dla wszystkich typów
-          const fileExt = path.extname(fileName); // .pdf, .png, .jpg
-          const txtFileName = fileName.replace(fileExt, '.txt');
-          const txtFilePath = path.join(UPLOAD_DIR, txtFileName);
-
-          await writeFile(txtFilePath, ocrResult.text, 'utf-8');
-          console.log('💾 Zapisano plik TXT:', txtFileName);
-
-          ocrResult.txtFile = txtFileName; // Dodaj nazwę pliku do odpowiedzi
-
-          console.log('📄 Rozpoznany tekst:', ocrResult.text);
-        } else {
-          const errorText = await ocrResponse.text();
-          console.error('❌ Błąd OCR:', errorText);
-          ocrResult = { error: errorText };
-        }
       } catch (ocrError) {
-        console.error('❌ Nie udało się połączyć z OCR API:', ocrError);
-        ocrResult = {
-          error: 'Nie udało się połączyć z OCR API',
-          details: ocrError instanceof Error ? ocrError.message : 'Nieznany błąd'
-        };
+        console.error('❌ OCR Error:', ocrError);
+        return NextResponse.json({
+          error: 'Błąd OCR',
+          details: ocrError instanceof Error ? ocrError.message : 'Unknown'
+        }, { status: 500 });
       }
     }
 
-    // Zwrócenie informacji o zapisanym pliku + wyniki OCR
     return NextResponse.json({
       success: true,
-      message: 'Plik został pomyślnie przesłany',
-      file: {
-        name: file.name,
-        savedAs: fileName,
-        size: file.size,
-        type: file.type,
-        path: filePath,
-        uploadedAt: new Date().toISOString()
-      },
-      ocr: ocrResult // Wyniki OCR jeśli PDF (null dla innych typów)
-    }, { status: 200 });
+      file: { name: file.name, savedAs: fileName }
+    });
 
   } catch (error) {
-    console.error('Błąd podczas przesyłania pliku:', error);
-    return NextResponse.json(
-      {
-        error: 'Wystąpił błąd podczas przesyłania pliku',
-        details: error instanceof Error ? error.message : 'Nieznany błąd'
-      },
-      { status: 500 }
-    );
+    console.error('❌ Upload Error:', error);
+    return NextResponse.json({
+      error: 'Błąd uploadu',
+      details: error instanceof Error ? error.message : 'Unknown'
+    }, { status: 500 });
   }
 }
 
-// Optional: GET endpoint do listowania plików
-export async function GET(request: NextRequest) {
+// GET - lista plików
+export async function GET() {
   try {
     const { readdir, stat } = await import('fs/promises');
 
@@ -181,7 +185,6 @@ export async function GET(request: NextRequest) {
           name: fileName,
           size: stats.size,
           uploadedAt: stats.mtime,
-          path: filePath
         };
       })
     );
@@ -193,10 +196,6 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Błąd podczas pobierania listy plików:', error);
-    return NextResponse.json(
-      { error: 'Błąd podczas pobierania listy plików' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Błąd' }, { status: 500 });
   }
 }

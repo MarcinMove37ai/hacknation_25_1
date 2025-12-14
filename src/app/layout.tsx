@@ -1,4 +1,4 @@
-//src/app/layout.tsx
+// src/app/layout.tsx
 import type { Metadata } from "next";
 import "./globals.css";
 import { Poppins } from 'next/font/google'
@@ -9,8 +9,12 @@ const poppins = Poppins({
 })
 
 export const metadata: Metadata = {
-  title: "Dashboard App",
+  title: "AI Jam Łódź | move37th.ai",
   description: "Dashboard application",
+  // ▼ DODAJ TEN FRAGMENT ▼
+  icons: {
+    icon: '/favicon.ico',
+  },
 };
 
 export default function RootLayout({

@@ -1,14 +1,16 @@
 "use client";
 
 import React, { useState, useRef } from 'react';
-import { FileText, CheckCircle, X, Loader2, HardDrive, CloudUpload, ArrowRight, AlertCircle } from 'lucide-react';
+import { FileText, CheckCircle, X, Loader2, HardDrive, CloudUpload, ArrowRight, AlertCircle, Layers } from 'lucide-react';
 
 export default function EzdSimulatorPage() {
   const [dragActive, setDragActive] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  // ZMIANA 1: Przechowujemy tablicę plików zamiast jednego
+  const [files, setFiles] = useState<File[]>([]);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [txtFileName, setTxtFileName] = useState<string | null>(null);
+  const [progress, setProgress] = useState({ current: 0, total: 0, message: '' });
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = (e: React.DragEvent) => {
@@ -25,8 +27,9 @@ export default function EzdSimulatorPage() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+    // ZMIANA 2: Obsługa wielu plików z Drag & Drop
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFiles(Array.from(e.dataTransfer.files));
       setUploadStatus('idle');
       setErrorMessage('');
     }
@@ -34,53 +37,140 @@ export default function EzdSimulatorPage() {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+    // ZMIANA 3: Obsługa wielu plików z inputa
+    if (e.target.files && e.target.files.length > 0) {
+      setFiles(Array.from(e.target.files));
       setUploadStatus('idle');
       setErrorMessage('');
     }
   };
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (files.length === 0) return;
 
     setUploadStatus('uploading');
     setErrorMessage('');
+    setProgress({ current: 0, total: 0, message: 'Starting batch process...' });
 
     const formData = new FormData();
-    formData.append('file', file);
+    // ZMIANA 4: Dodawanie wszystkich plików do FormData
+    files.forEach((file) => {
+      formData.append('files', file);
+    });
 
     try {
-      console.log('Sending file to OCR...');
-      const uploadResponse = await fetch('/api/upload', {
+      console.log('🚀 [Frontend] Starting batch upload to /api/upload-stream...');
+
+      const response = await fetch('/api/upload-stream', {
         method: 'POST',
         body: formData,
       });
 
-      const uploadData = await uploadResponse.json();
-
-      if (!uploadResponse.ok) {
-        throw new Error(uploadData.error || 'Error during upload');
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status}`);
       }
 
-      console.log('OCR completed:', uploadData);
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-      if (!uploadData.ocr?.txtFile) {
-        throw new Error('Failed to generate TXT file');
+      if (!reader) {
+        throw new Error('No response body');
       }
 
-      setTxtFileName(uploadData.ocr.txtFile);
-      setUploadStatus('success');
+      let receivedDone = false;
+      let receivedSaved = false;
+      let savedTxtFile: string | null = null;
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          console.log('🏁 [Frontend] Stream closed by server');
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmedLine = line.trim();
+          if (!trimmedLine.startsWith('data: ')) continue;
+
+          try {
+            const jsonStr = trimmedLine.substring(6);
+            const data = JSON.parse(jsonStr);
+
+            console.log(`📊 [Stream Log] ${data.status}:`, data.message || '');
+
+            if (data.message) {
+              setProgress(prev => ({ ...prev, message: data.message }));
+            }
+
+            if (['loading', 'analyzing', 'converting', 'start'].includes(data.status)) {
+              setProgress({
+                current: 0,
+                total: data.total || 0,
+                message: data.message || 'Initializing...'
+              });
+            }
+
+            if (['page', 'detecting', 'preprocessing', 'ocr', 'extracted'].includes(data.status)) {
+              setProgress({
+                current: data.current || 1,
+                total: data.total || 1,
+                message: data.message || 'Processing...'
+              });
+            }
+
+            if (data.status === 'saved') {
+              console.log('💾 [Frontend] File saved:', data.txtFile);
+              savedTxtFile = data.txtFile;
+              setTxtFileName(data.txtFile);
+              receivedSaved = true;
+            }
+
+            if (data.status === 'done') {
+              console.log('✅ [Frontend] Process done');
+              receivedDone = true;
+            }
+
+            if (data.status === 'error') {
+              throw new Error(data.message || 'Processing error');
+            }
+
+          } catch (e) {
+            if (!(e instanceof SyntaxError)) {
+               console.warn('⚠️ JSON Parse Warning:', e);
+            }
+          }
+        }
+      }
+
+      console.log(`🔍 [Frontend] Verify: done=${receivedDone}, saved=${receivedSaved}, file=${savedTxtFile}`);
+
+      if (receivedSaved && savedTxtFile) {
+        console.log('🎉 [Frontend] Success!');
+        setUploadStatus('success');
+      } else {
+        if (receivedDone) {
+             console.error('❌ Received done but missing save confirmation.');
+             throw new Error('Processing finished but file save failed.');
+        }
+        console.error('❌ Stream ended unexpectedly.');
+        throw new Error('Connection interrupted. Please try again.');
+      }
 
     } catch (error) {
-      console.error('Error:', error);
+      console.error('❌ [Frontend] Critical Error:', error);
       setUploadStatus('error');
       setErrorMessage(error instanceof Error ? error.message : 'Unknown error');
     }
   };
 
-  const removeFile = () => {
-    setFile(null);
+  const removeFiles = () => {
+    setFiles([]);
     setUploadStatus('idle');
     setErrorMessage('');
     setTxtFileName(null);
@@ -92,6 +182,12 @@ export default function EzdSimulatorPage() {
   const openFileExplorer = () => {
     inputRef.current?.click();
   };
+
+  // Helper do obliczania łącznego rozmiaru
+  const totalSize = files.reduce((acc, file) => acc + file.size, 0);
+  const formattedSize = totalSize / 1024 < 1024
+    ? `${(totalSize / 1024).toFixed(2)} KB`
+    : `${(totalSize / (1024 * 1024)).toFixed(2)} MB`;
 
   return (
     <div className="min-h-full flex flex-col items-center justify-start pt-4 md:pt-16 bg-gray-50/50 p-2 sm:p-6 font-sans animate-in fade-in duration-500">
@@ -109,7 +205,7 @@ export default function EzdSimulatorPage() {
                 AI powered OCR App
               </h1>
               <p className="text-gray-500 font-medium text-xs sm:text-sm mt-0.5">
-                Turn any PDF or Image file into a plain text TXT document
+                Merge & Convert multiple PDF/Images into one TXT file
               </p>
             </div>
           </div>
@@ -129,10 +225,10 @@ export default function EzdSimulatorPage() {
         <div className="p-4 sm:p-6 md:p-12 space-y-6 md:space-y-8">
           <div className="space-y-1">
             <h2 className="text-base sm:text-lg font-bold text-gray-800">
-              Upload new file
+              Upload files
             </h2>
             <p className="text-gray-500">
-              Upload a file for AI OCR processing
+              Select one or multiple files to process and merge
             </p>
           </div>
 
@@ -145,7 +241,7 @@ export default function EzdSimulatorPage() {
                   ? 'border-red-500 bg-red-50/40 scale-[1.01] shadow-inner'
                   : uploadStatus === 'error'
                     ? 'border-red-300 bg-red-50/10'
-                    : file
+                    : files.length > 0
                       ? 'border-blue-300 bg-blue-50/20'
                       : 'border-gray-200 bg-gray-50 hover:bg-gray-100 hover:border-gray-300'
                 }
@@ -162,18 +258,23 @@ export default function EzdSimulatorPage() {
                 className="hidden"
                 onChange={handleChange}
                 accept=".pdf,.png,.jpg,.jpeg"
+                multiple // ZMIANA 5: Atrybut multiple
               />
 
-              {file ? (
+              {files.length > 0 ? (
                 <div className="flex flex-row items-center justify-between w-full animate-in slide-in-from-left-2 duration-300 z-10">
                   <div className="flex items-center gap-3 sm:gap-6 min-w-0 flex-1">
                     <div className="w-12 h-12 sm:w-16 sm:h-16 bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center justify-center text-blue-600 flex-shrink-0">
-                      <FileText className="w-6 h-6 sm:w-8 sm:h-8" strokeWidth={1.5} />
+                      {files.length > 1 ? (
+                        <Layers className="w-6 h-6 sm:w-8 sm:h-8" strokeWidth={1.5} />
+                      ) : (
+                        <FileText className="w-6 h-6 sm:w-8 sm:h-8" strokeWidth={1.5} />
+                      )}
                     </div>
 
                     <div className="min-w-0 flex-1 pr-4">
                       <p className="text-gray-900 font-bold text-sm sm:text-lg break-words text-left leading-tight">
-                        {file.name}
+                        {files.length === 1 ? files[0].name : `${files.length} files selected`}
                       </p>
 
                       {uploadStatus === 'error' ? (
@@ -183,7 +284,7 @@ export default function EzdSimulatorPage() {
                         </p>
                       ) : (
                         <p className="text-gray-500 font-medium text-sm text-left mt-1">
-                          File is ready to go • {(file.size / 1024).toFixed(2)} KB
+                          Ready to merge • {formattedSize}
                         </p>
                       )}
                     </div>
@@ -191,7 +292,7 @@ export default function EzdSimulatorPage() {
 
                   {uploadStatus !== 'uploading' && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); removeFile(); }}
+                      onClick={(e) => { e.stopPropagation(); removeFiles(); }}
                       className="p-3 bg-white border border-red-100 text-red-600 rounded-xl hover:bg-red-50 hover:border-red-200 transition-all shadow-sm group/btn flex-shrink-0 cursor-pointer"
                     >
                       <X size={20} className="group-hover/btn:scale-110 transition-transform" />
@@ -208,7 +309,7 @@ export default function EzdSimulatorPage() {
                   </div>
                   <div className="flex flex-col items-center sm:items-start text-center sm:text-left space-y-1">
                     <p className="text-gray-800 font-bold text-base sm:text-xl group-hover:text-red-600 transition-colors">
-                      Drag and drop file here
+                      Drag and drop files here
                     </p>
                     <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
                       <p className="text-gray-400 text-xs sm:text-sm font-medium">
@@ -232,9 +333,9 @@ export default function EzdSimulatorPage() {
                   <CheckCircle className="w-6 h-6 sm:w-8 sm:h-8" />
                 </div>
                 <div>
-                  <h3 className="text-lg sm:text-xl font-bold text-gray-800">OCR completed!</h3>
+                  <h3 className="text-lg sm:text-xl font-bold text-gray-800">Processing completed!</h3>
                   <p className="text-gray-600 text-xs sm:text-sm mt-1">
-                    File <span className="font-semibold text-gray-900">{file?.name}</span> has been processed.
+                    <span className="font-semibold text-gray-900">{files.length} files</span> have been processed and merged.
                   </p>
                 </div>
               </div>
@@ -245,14 +346,14 @@ export default function EzdSimulatorPage() {
                 className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl font-bold text-center hover:from-blue-500 hover:to-blue-600 transition-all shadow-lg flex items-center justify-center gap-3 cursor-pointer"
               >
                 <FileText size={20} />
-                Download TXT file
+                Download Merged TXT
               </a>
 
               <button
-                onClick={removeFile}
+                onClick={removeFiles}
                 className="w-full py-3 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-all font-semibold cursor-pointer"
               >
-                Process another file
+                Process new files
               </button>
             </div>
           )}
@@ -260,10 +361,10 @@ export default function EzdSimulatorPage() {
           {uploadStatus !== 'success' && (
             <div className="pt-2">
               <button
-                onClick={(!file || uploadStatus === 'uploading') ? undefined : handleUpload}
+                onClick={(files.length === 0 || uploadStatus === 'uploading') ? undefined : handleUpload}
                 className={`
                   relative w-full py-3 sm:py-5 rounded-2xl font-bold text-white shadow-xl transition-all duration-300 flex items-center justify-center gap-3 text-base sm:text-lg
-                  ${!file
+                  ${files.length === 0
                     ? 'bg-gray-800 text-gray-400 cursor-not-allowed border border-gray-700 shadow-none'
                     : uploadStatus === 'uploading'
                       ? 'bg-gradient-to-r from-orange-500 to-red-600 cursor-wait shadow-lg'
@@ -271,12 +372,12 @@ export default function EzdSimulatorPage() {
                   }
                 `}
               >
-                {!file ? (
-                  <span>Waiting for file</span>
+                {files.length === 0 ? (
+                  <span>Waiting for files</span>
                 ) : uploadStatus === 'uploading' ? (
                   <>
                     <Loader2 size={24} className="animate-spin" />
-                    <span>Processing...</span>
+                    <span>{progress.message || 'Processing...'}</span>
                   </>
                 ) : uploadStatus === 'error' ? (
                   <>
@@ -285,7 +386,7 @@ export default function EzdSimulatorPage() {
                   </>
                 ) : (
                   <>
-                    <span>Start OCR processing</span>
+                    <span>Start Batch OCR</span>
                     <ArrowRight size={20} className="opacity-100 translate-x-0 transition-all" />
                   </>
                 )}
@@ -298,7 +399,7 @@ export default function EzdSimulatorPage() {
           <div className="flex items-center gap-2">
             SECURE_CONNECTION: ENCRYPTED
           </div>
-          <span>v.2.0.4-PUW</span>
+          <span>v.2.1.0-MULTI</span>
         </div>
       </div>
     </div>
