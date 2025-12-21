@@ -566,9 +566,21 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
             </p>
 
             <form onSubmit={handleLogin} className="w-full space-y-4">
-              <div className="relative">
+              <div className="relative"> {/* <--- TU BYŁ DUPLIKAT, ZOSTAWIAMY TYLKO JEDEN */}
+                {/* Dodaj ukryte pole username, aby uspokoić menedżery haseł (opcjonalne, ale pomaga) */}
                 <input
+                  type="text"
+                  name="username"
+                  autoComplete="username"
+                  style={{ display: 'none' }}
+                  aria-hidden="true"
+                />
+
+                <input
+                  id="dashboard-password"
+                  name="password"
                   type="password"
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Hasło"
