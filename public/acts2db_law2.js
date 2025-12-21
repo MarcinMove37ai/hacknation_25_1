@@ -9,7 +9,7 @@ import pg from 'pg';
 
 // ========== KONFIGURACJA ==========
 const TEST_MODE = false; // true = 5 losowych z każdego pliku, false = wszystkie dane
-const GENERATE_EMBEDDINGS = true; // true = generuj embeddingi (wymaga API key), false = tylko struktura danych
+const GENERATE_EMBEDDINGS = false; // true = generuj embeddingi (wymaga API key), false = tylko struktura danych
 const MIN_TOKEN_COUNT_FOR_ACTS = 20; // Embeduj tylko acts gdzie token_count >= ta wartość (0 = wszystkie)
 const MIN_TOKEN_COUNT_FOR_CUMULATED = 10; // Embeduj tylko acts_cumulated gdzie token_count >= ta wartość (0 = wszystkie)
 

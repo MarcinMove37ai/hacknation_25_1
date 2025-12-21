@@ -77,7 +77,7 @@ Poniżej historia konwersacji:
 
     // --- PEŁNE LOGOWANIE DLA DEBUGOWANIA ---
     console.log('\n================ [CHAT API REQUEST START] ================');
-    console.log('🤖 Model: claude-haiku-4-5');
+    console.log('🤖 Model: claude-sonnet-4-5');
 
     console.log('\n📜 --- SYSTEM PROMPT ---');
     console.log(systemPrompt);
@@ -85,7 +85,7 @@ Poniżej historia konwersacji:
     // Wywołanie Claude
     const response = await anthropic.messages.create({
       model: 'claude-haiku-4-5', // lub claude-3-5-sonnet-20241022
-      max_tokens: 2048,
+      max_tokens: 3000,
       messages: messages,
       system: systemPrompt
     });

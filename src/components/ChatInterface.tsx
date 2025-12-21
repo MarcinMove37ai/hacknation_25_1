@@ -15,6 +15,7 @@ interface Source {
   act?: string;
   article?: string;
   paragraph?: string;
+  point?: string;
   title: string;
   content: string;
   text_clean?: string;
@@ -37,48 +38,78 @@ interface Chat {
 }
 
 // ============================================================================
-// KOMPONENT ŹRÓDŁA (POPUP)
+// NOWY KOMPONENT ŹRÓDŁA (POPUP) - UŻYWA /api/context API
 // ============================================================================
+// Zastąp TYLKO sekcję od linii ~40 do ~176 w ChatInterface.tsx
+
+// Nowy interfejs dla fragmentu z API
+interface ContextFragment {
+  id: string;
+  act: string;
+  art_no: string;
+  par_no: string | null;
+  pkt_no: string | null;
+  text: string;
+  text_clean: string;
+}
 
 interface SourceCardProps {
   source: Source;
   onClose: () => void;
-  kpaData: KPAChunk[];
 }
 
-const SourceCard: React.FC<SourceCardProps> = ({ source, onClose, kpaData }) => {
-  // Znajdź wybrany chunk i sąsiednie
-  const findContextChunks = () => {
-    // Znajdź index wybranego chunku
-    const currentIndex = kpaData.findIndex(
-      chunk => chunk.art_no === source.article && chunk.par_no === source.paragraph
-    );
+const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
+  const [context, setContext] = useState<{
+    before: ContextFragment[];
+    current: ContextFragment | null;
+    after: ContextFragment[];
+  }>({ before: [], current: null, after: [] });
+  const [isLoading, setIsLoading] = useState(true);
 
-    if (currentIndex === -1) {
-      return { before: [], current: null, after: [] };
+  useEffect(() => {
+    fetchContext();
+  }, [source]);
+
+  const fetchContext = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          act: source.act,
+          article: source.article,
+          paragraph: source.paragraph || null,
+          point: source.point || null
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Błąd pobierania kontekstu');
+      }
+
+      const data = await response.json();
+      setContext(data);
+    } catch (error) {
+      console.error('❌ Błąd ładowania kontekstu:', error);
+    } finally {
+      setIsLoading(false);
     }
-
-    const before = kpaData.slice(Math.max(0, currentIndex - 3), currentIndex);
-    const current = kpaData[currentIndex];
-    const after = kpaData.slice(currentIndex + 1, currentIndex + 4);
-
-    return { before, current, after };
   };
 
-  const { before, current, after } = findContextChunks();
-
-  const renderChunk = (chunk: KPAChunk, isCurrent = false) => {
+  const renderFragment = (fragment: ContextFragment, isCurrent = false) => {
     const label = [
-      chunk.art_no ? `Art. ${chunk.art_no}` : '',
-      chunk.par_no ? `§ ${chunk.par_no}` : '',
-      chunk.pkt_no ? `pkt ${chunk.pkt_no}` : ''
+      fragment.act,
+      fragment.art_no ? `Art. ${fragment.art_no}` : '',
+      fragment.par_no ? `§ ${fragment.par_no}` : '',
+      fragment.pkt_no ? `pkt ${fragment.pkt_no}` : ''
     ].filter(Boolean).join(' ') || 'Fragment';
 
     return (
       <div
-        className={`p-3 rounded-lg ${
+        className={`p-4 rounded-lg ${
           isCurrent
-            ? 'bg-blue-50 border-2 border-blue-900'
+            ? 'bg-blue-50 border-2 border-blue-500'
             : 'bg-gray-50 border border-gray-200'
         }`}
       >
@@ -90,7 +121,7 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose, kpaData }) => 
         <p className={`text-sm leading-relaxed ${
           isCurrent ? 'text-gray-900' : 'text-gray-600'
         }`}>
-          {chunk.text}
+          {fragment.text}
         </p>
       </div>
     );
@@ -102,8 +133,10 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose, kpaData }) => 
         {/* Header */}
         <div className="flex justify-between items-center p-4 border-b border-gray-200">
           <h2 className="text-lg font-bold text-blue-900">
-            Kontekst - {source.article && `Art. ${source.article}`}
+            Kontekst - {source.act && `${source.act} `}
+            {source.article && `Art. ${source.article}`}
             {source.paragraph && ` § ${source.paragraph}`}
+            {source.point && ` pkt ${source.point}`}
           </h2>
           <button
             onClick={onClose}
@@ -118,57 +151,63 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose, kpaData }) => 
           scrollbarWidth: 'thin',
           scrollbarColor: '#d1d5db #f3f4f6'
         }}>
-          <div className="px-8 py-6 space-y-3">
-            {/* Chunks przed */}
-            {before.length > 0 && (
-              <>
-                <div className="text-xs text-gray-500 uppercase font-medium mb-2">
-                  Poprzednie fragmenty:
-                </div>
-                {before.map((chunk, idx) => (
-                  <div key={`before-${idx}`}>
-                    {renderChunk(chunk, false)}
+          {isLoading ? (
+            <div className="flex items-center justify-center p-8">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-900" />
+            </div>
+          ) : (
+            <div className="px-8 py-6 space-y-3">
+              {/* Fragmenty przed */}
+              {context.before.length > 0 && (
+                <>
+                  <div className="text-xs text-gray-500 uppercase font-medium mb-2">
+                    Poprzednie fragmenty:
                   </div>
-                ))}
-                <div className="my-2 border-t border-gray-300" />
-              </>
-            )}
+                  {context.before.map((fragment) => (
+                    <div key={`before-${fragment.id}`}>
+                      {renderFragment(fragment, false)}
+                    </div>
+                  ))}
+                  <div className="my-2 border-t border-gray-300" />
+                </>
+              )}
 
-            {/* Wybrany chunk */}
-            {current && (
-              <>
-                <div className="text-xs text-blue-900 uppercase font-medium mb-2">
-                  Wybrany fragment:
-                </div>
-                <div key="current">
-                  {renderChunk(current, true)}
-                </div>
-              </>
-            )}
-
-            {/* Chunks po */}
-            {after.length > 0 && (
-              <>
-                <div className="my-2 border-t border-gray-300" />
-                <div className="text-xs text-gray-500 uppercase font-medium mb-2">
-                  Następne fragmenty:
-                </div>
-                {after.map((chunk, idx) => (
-                  <div key={`after-${idx}`}>
-                    {renderChunk(chunk, false)}
+              {/* Wybrany fragment */}
+              {context.current && (
+                <>
+                  <div className="text-xs text-blue-900 uppercase font-medium mb-2">
+                    Wybrany fragment:
                   </div>
-                ))}
-              </>
-            )}
+                  <div key="current">
+                    {renderFragment(context.current, true)}
+                  </div>
+                </>
+              )}
 
-            {source.relevance_score && (
-              <div className="mt-4 p-3 bg-blue-50 rounded-lg border-t border-gray-200">
-                <p className="text-sm text-gray-600">
-                  Trafność wyszukiwania: {(source.relevance_score * 100).toFixed(1)}%
-                </p>
-              </div>
-            )}
-          </div>
+              {/* Fragmenty po */}
+              {context.after.length > 0 && (
+                <>
+                  <div className="my-2 border-t border-gray-300" />
+                  <div className="text-xs text-gray-500 uppercase font-medium mb-2">
+                    Następne fragmenty:
+                  </div>
+                  {context.after.map((fragment) => (
+                    <div key={`after-${fragment.id}`}>
+                      {renderFragment(fragment, false)}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {source.relevance_score && (
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg border-t border-gray-200">
+                  <p className="text-sm text-gray-600">
+                    Trafność wyszukiwania: {(source.relevance_score * 100).toFixed(1)}%
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -855,28 +894,35 @@ const ChatInterface: React.FC = () => {
                         </ReactMarkdown>
                       </div>
 
-                      {/* Źródła jako klikalne linki w stopce (ŁAPKI TUTAJ) */}
+                      {/* Źródła jako klikalne linki w stopce */}
                       {message.sources && message.sources.length > 0 && (
                           <div className="mt-4 pt-3 border-t border-gray-300">
                             <p className="text-xs font-medium text-gray-600 mb-2">Przypisy:</p>
                             <div className="space-y-1">
-                              {message.sources.map((source, idx) => (
-                                <button
-                                  key={`${source.id}-${idx}`} /* <--- TU BYŁ BŁĄD. ZMIANA NA UNIKALNY KLUCZ */
-                                  onClick={() => setSelectedSource(source)}
-                                  className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1 rounded transition-colors cursor-pointer"
-                                >
-                                  <span className="font-medium text-blue-900">[{idx + 1}]</span>{' '}
-                                  <span className="font-medium">
-                                    {source.article && `Art. ${source.article}`}
-                                    {source.paragraph && ` § ${source.paragraph}`}
-                                  </span>
-                                  {' - '}
-                                  <span className="text-gray-600">
-                                    {source.content.substring(0, 60)}...
-                                  </span>
-                                </button>
-                              ))}
+                              {message.sources.map((source, idx) => {
+                                // Budowanie pełnej etykiety z aktem i punktami
+                                const label = [
+                                  source.act,
+                                  source.article && `Art. ${source.article}`,
+                                  source.paragraph && `§ ${source.paragraph}`,
+                                  source.point && `pkt ${source.point}`
+                                ].filter(Boolean).join(' ');
+
+                                return (
+                                  <button
+                                    key={`${source.id}-${idx}`}
+                                    onClick={() => setSelectedSource(source)}
+                                    className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1 rounded transition-colors cursor-pointer"
+                                  >
+                                    <span className="font-medium text-blue-900">[{idx + 1}]</span>{' '}
+                                    <span className="font-medium">{label}</span>
+                                    {' - '}
+                                    <span className="text-gray-600">
+                                      {source.content.substring(0, 60)}...
+                                    </span>
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                       )}
@@ -965,7 +1011,6 @@ const ChatInterface: React.FC = () => {
       {selectedSource && (
         <SourceCard
           source={selectedSource}
-          kpaData={kpaData}
           onClose={() => setSelectedSource(null)}
         />
       )}
