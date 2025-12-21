@@ -98,7 +98,7 @@ const getMenuItems = (lang: 'pl', stats?: DecisionStats): MenuItem[] => [
   },
   {
     IconComponent: Bot,
-    label: 'Czat z KPA',
+    label: 'LegalGPT.pl',
     path: '/dashboard/kpa'
   }
 ];

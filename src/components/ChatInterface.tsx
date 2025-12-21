@@ -669,9 +669,7 @@ const ChatInterface: React.FC = () => {
           }).filter(Boolean)
         : [];
 
-      // POPRAWKA: Fallback - jeśli filtrowanie zwróci 0 wyników (bo np. błąd JSON), pokaż wszystko co znaleziono
-      // Dzięki temu użytkownik nigdy nie zostaje bez źródeł
-      const sourcesToDisplay = finalSources.length > 0 ? finalSources : allAvailableData;
+      const sourcesToDisplay = finalSources;
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
