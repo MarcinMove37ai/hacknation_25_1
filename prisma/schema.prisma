@@ -1,64 +1,40 @@
 generator client {
   provider        = "prisma-client-js"
-  // Włączenie obsługi rozszerzeń PostgreSQL (wymagane dla pgvector)
   previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
-  // Deklaracja rozszerzenia vector w bazie danych
   extensions = [vector]
 }
 
-model Decision {
-  id               String   @id @default(cuid())
-  documentDate     String?  @map("document_date")
-  decisionNumber   String?  @map("decision_number")
-  banYears         Int?     @map("ban_years")
-  legalBasisKpa    String?  @map("legal_basis_kpa")
-  legalBasisUitput String?  @map("legal_basis_uitput")
-  appealDays       Int?     @map("appeal_days")
-  appealCourt      String?  @map("appeal_court")
-  signedBy         String?  @map("signed_by")
-  filePath         String?  @map("file_path")
-  createdAt        DateTime @default(now()) @map("created_at")
-  status           String?  @map("status")
-  url              String?  @map("url")
+model acts {
+  id          Int                    @id @default(autoincrement())
+  act         String
+  art_no      String?
+  par_no      String?
+  pkt_no      String?
+  text        String
+  text_clean  String?
+  token_count Int?
+  embedding   Unsupported("vector")?
 
-  // Długi tekst (odpowiednik TEXT w SQL)
-  decisionText String? @map("decision_text") @db.Text
-
-  // Długi tekst dla organizatora
-  organizator String? @map("organizator") @db.Text
-
-  // Wektor dla embeddingów (1536 wymiarów)
-  embedding Unsupported("vector(1536)")? @map("embedding")
-
-  // Relacja 1:1 z ExtensionDraft
-  extensionDraft ExtensionDraft? @relation("DecisionToExtensionDraft")
-
-  @@map("decisions")
+  @@index([act], map: "idx_acts_act")
+  @@index([act, art_no], map: "idx_acts_art_no")
 }
 
-model ExtensionDraft {
-  id         String   @id @default(cuid())
+model acts_cumulated {
+  id          Int                    @id @default(autoincrement())
+  act         String
+  art_no      String?
+  par_no      String?
+  pkt_no      String?
+  text        String
+  text_clean  String?
+  token_count Int?
+  embedding   Unsupported("vector")?
 
-  // powiązanie 1:1 z Decision
-  decisionId String   @unique
-  decision   Decision @relation("DecisionToExtensionDraft", fields: [decisionId], references: [id])
-
-  // dane do wygenerowania przedłużenia
-  decisionNumber   String  // np. KP-TP-III.5222.7.16.2022.EL
-  organizer        String  // np. Błękitny Raj (mock)
-  legalForm        String  // np. "Stowarzyszenie"
-  organizerAddress String  // pełny adres siedziby
-  documentDate     String  // np. "2023-08-01"
-  decisionText     String  @db.Text // pełne uzasadnienie
-
-  // meta dokumentu (opcjonalnie)
-  filePath  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  @@index([act], map: "idx_acts_cumulated_act")
+  @@index([act, art_no], map: "idx_acts_cumulated_art_no")
 }
-

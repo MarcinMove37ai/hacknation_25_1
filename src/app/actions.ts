@@ -5,49 +5,23 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 export async function getDecisionsAction() {
-  try {
-    // Pobieramy wszystkie rekordy, sortując od najnowszych
-    const decisions = await prisma.decision.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: {
-        extensionDraft: true,   // 👈 NAZWA relacji z Prisma (sprawdź w schema.prisma)
-      },
-    });
-    return { success: true, data: decisions };
-  } catch (error) {
-    console.error("Błąd pobierania spraw:", error);
-    return { success: false, data: [] };
-  }
+  // FIX: Model 'Decision' został usunięty.
+  // Zwracamy pustą tablicę, aby uniknąć błędów kompilacji,
+  // zachowując jednocześnie strukturę funkcji dla kompatybilności.
+  return { success: true, data: [] };
 }
 
 // NOWA FUNKCJA: Pobieranie statystyk statusów
 export async function getDecisionStatsAction() {
-  try {
-    const stats = await prisma.decision.groupBy({
-      by: ['status'],
-      _count: {
-        status: true,
-      },
-    });
+  // FIX: Model 'Decision' został usunięty.
+  // Zwracamy wyzerowane statystyki.
+  const emptyStats = {
+    total: 0,
+    new: 0,
+    in_progress: 0,
+    pending: 0,
+    closed: 0,
+  };
 
-    // Obliczenie totalu
-    const total = await prisma.decision.count();
-
-    // Formatowanie wyników
-    const formattedStats = {
-      total,
-      new: stats.find(s => s.status === 'new')?._count.status || 0,
-      in_progress: stats.find(s => s.status === 'in_progress')?._count.status || 0,
-      pending: stats.find(s => s.status === 'pending')?._count.status || 0,
-      closed: stats.find(s => s.status === 'closed')?._count.status || 0,
-    };
-
-    return { success: true, data: formattedStats };
-  } catch (error) {
-    console.error("Błąd pobierania statystyk:", error);
-    return {
-      success: false,
-      data: { total: 0, new: 0, in_progress: 0, pending: 0, closed: 0 }
-    };
-  }
+  return { success: true, data: emptyStats };
 }

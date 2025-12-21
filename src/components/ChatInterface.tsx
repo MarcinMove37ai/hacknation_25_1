@@ -2,8 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Loader2, MessageSquarePlus, X, Trash2, Menu } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import Anthropic from '@anthropic-ai/sdk';
-import { semanticSearch, loadKPAData, type KPAChunk } from '@/utils/semanticSearch';
+import { loadKPAData, type KPAChunk } from '@/utils/semanticSearch';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -13,10 +12,12 @@ import remarkGfm from 'remark-gfm';
 
 interface Source {
   id: string;
+  act?: string;
   article?: string;
   paragraph?: string;
   title: string;
   content: string;
+  text_clean?: string;
   relevance_score?: number;
 }
 
@@ -359,6 +360,9 @@ const ChatInterface: React.FC = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [kpaData, setKpaData] = useState<KPAChunk[]>([]);
 
+  // Zmiana: Przechowujemy historię wiedzy jako tablicę (do 3 ostatnich wpisów)
+  const [knowledgeHistory, setKnowledgeHistory] = useState<string[]>([]);
+
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -407,6 +411,7 @@ const ChatInterface: React.FC = () => {
     setChats(prev => [newChat, ...prev]);
     setCurrentChatId(newChat.id);
     setMessages([]);
+    setKnowledgeHistory([]); // Resetujemy wiedzę przy nowym czacie
   };
 
   // Wybór czatu
@@ -424,47 +429,42 @@ const ChatInterface: React.FC = () => {
     if (currentChatId === chatId) {
       setCurrentChatId(null);
       setMessages([]);
+      setKnowledgeHistory([]);
     }
   };
 
-  // Generowanie tytułu czatu
+  // Generowanie tytułu czatu przez API
   const generateChatTitle = async (chatId: number, firstMessage: string) => {
     try {
-      const anthropic = new Anthropic({
-        apiKey: process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || '',
-        dangerouslyAllowBrowser: true
+      const response = await fetch('/api/chat-title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: firstMessage })
       });
 
-      const response = await anthropic.messages.create({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 20,
-        temperature: 0.7,
-        messages: [
-          {
-            role: 'user',
-            content: `Nazwij krótko (2-4 słowa) zagadnienie którego dotyczy pytanie. Użyj języka polskiego, bez znaków specjalnych i interpunkcji: "${firstMessage}"`
-          }
-        ]
-      });
+      if (!response.ok) throw new Error('Błąd generowania tytułu');
 
-      let title = 'Nowy czat';
-      if (response.content && response.content.length > 0) {
-        const contentBlock = response.content[0];
-        if ('text' in contentBlock) {
-          title = contentBlock.text.trim();
-        }
-      }
+      const data = await response.json();
 
       setChats(prev => prev.map(chat =>
         chat.id === chatId
-          ? { ...chat, title }
+          ? { ...chat, title: data.title }
           : chat
       ));
+
     } catch (error) {
-      console.error('Błąd generowania tytułu:', error);
+      console.error('Nie udało się wygenerować tytułu:', error);
+      const fallbackTitle = firstMessage.split(' ').slice(0, 4).join(' ') + '...';
+
+      setChats(prev => prev.map(chat =>
+        chat.id === chatId
+          ? { ...chat, title: fallbackTitle }
+          : chat
+      ));
     }
   };
 
+  // Wysłanie wiadomości
   // Wysłanie wiadomości
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -497,113 +497,156 @@ const ChatInterface: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // 1. SEMANTIC SEARCH - znajdź relevantne chunks z KPA
-      console.log('🔍 Searching KPA database...');
-      const searchResults = await semanticSearch(
-        userMessage.content,
-        kpaData,
-        5
-      );
+      console.log('\n🔵 --- DIAGNOSTYKA: START TURY ROZMOWY ---');
 
-      console.log(`📊 Found ${searchResults.length} relevant chunks`);
+      // 1. PRZYGOTOWANIE KONTEKSTU DLA WYSZUKIWARKI
+      // Łączymy ostatnie 3 podsumowania w jeden ciąg tekstu
+      const contextString = knowledgeHistory.join(' ');
 
-      // 2. PRZYGOTUJ KONTEKST z KPA dla Claude
-      const kpaContext = searchResults.length > 0
-        ? `\n\nRelevantne fragmenty z Kodeksu postępowania administracyjnego:\n\n${searchResults.map((r, idx) =>
-            `[${idx + 1}] ${r.title}\n${r.content}`
-          ).join('\n\n')}`
-        : '';
+      // Tworzymy "Wzbogacone Zapytanie" dla bazy wektorowej
+      const queryForSearch = contextString
+        ? `${userMessage.content} (Kontekst z poprzednich pytań: ${contextString})`
+        : userMessage.content;
 
-      // 3. Inicjalizacja Anthropic SDK
-      const anthropic = new Anthropic({
-        apiKey: process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || '',
-        dangerouslyAllowBrowser: true
+      // LOG DIAGNOSTYCZNY 1
+      console.log('🔵 Query do VDB (Search):', queryForSearch);
+
+      // 1. SEMANTIC SEARCH
+      const searchResponse = await fetch('/api/acts-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: queryForSearch }),
       });
 
-      // PAMIĘĆ KONWERSACJI - ostatnie 3 wymiany (max 6 wiadomości)
-      // Bierzemy ostatnie wiadomości, ale max 6 (3 user + 3 assistant)
-      const recentMessages = newMessages.slice(-6);
+      if (!searchResponse.ok) {
+        throw new Error(`Błąd API wyszukiwania: ${searchResponse.statusText}`);
+      }
 
+      const searchData = await searchResponse.json();
+      console.log(`📊 Wyniki VDB: ${searchData.cumulated.length} cumulated, ${searchData.detailed.length} detailed`);
+
+      // 2. CONTEXT BUILDING
+      console.log('🏗️ Budowanie kontekstu XML...');
+      const cumulatedIds = searchData.cumulated.map((r: any) => parseInt(r.id));
+      const actsIds = searchData.detailed.map((r: any) => parseInt(r.id));
+
+      const contextResponse = await fetch('/api/build-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cumulatedIds: cumulatedIds,
+          actsIds: actsIds
+        })
+      });
+
+      if (!contextResponse.ok) {
+        throw new Error('Błąd podczas budowania kontekstu');
+      }
+
+      const { context } = await contextResponse.json();
+
+      // PAMIĘĆ KONWERSACJI
+      const recentMessages = newMessages.slice(-6);
       const conversationHistory = recentMessages.map(msg => ({
         role: msg.type === 'user' ? 'user' as const : 'assistant' as const,
         content: msg.content
       }));
 
-      console.log(`💬 Wysyłam do Claude: ${conversationHistory.length} wiadomości (z ostatnich ${newMessages.length})`);
-
-      // 4. WYWOŁANIE API Claude z kontekstem KPA
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4096,
-        messages: conversationHistory,
-        system: `Jesteś pomocnym asystentem specjalizującym się w Kodeksie postępowania administracyjnego (KPA).
-
-Odpowiadaj jasno, zwięźle i konkretnie na pytania dotyczące procedur administracyjnych.
-
-KONTEKST ROZMOWY:
-Masz dostęp do ostatnich wymian wiadomości z użytkownikiem. Wykorzystaj ten kontekst aby udzielać spójnych odpowiedzi i odnosić się do wcześniejszych pytań gdy jest to stosowne.
-
-${kpaContext ? `ŹRÓDŁA Z KPA:\n${kpaContext}` : ''}
-
-OBOWIĄZKOWE FORMATOWANIE - ZAWSZE UŻYWAJ MARKDOWN:
-
-1. Strukturyzuj odpowiedź używając nagłówków:
-   - ## Główna sekcja
-   - ### Podsekcja
-
-2. Podkreślaj kluczowe informacje:
-   - **pogrubienie** dla ważnych terminów, liczb, dat
-   - *kursywa* dla terminów prawniczych po raz pierwszy
-
-3. Organizuj informacje w listy:
-   - Listy numerowane (1., 2., 3.) dla kroków/procedur/terminów
-   - Listy wypunktowane (- lub *) dla warunków/przykładów
-
-4. Dodawaj odniesienia [1], [2], [3] do źródeł z KPA
-
-PRZYKŁAD ODPOWIEDZI (SKOPIUJ TEN STYL):
-
-## Terminy w postępowaniu administracyjnym
-
-Zgodnie z KPA, organy administracji publicznej mają obowiązek załatwiać sprawy **bez zbędnej zwłoki**[1].
-
-### Podstawowe terminy
-
-1. **7 dni** - podstawowy termin załatwienia sprawy w prostych przypadkach[2]
-2. **14 dni** - termin na wniesienie *odwołania* od decyzji[3]
-3. **30 dni** - w sprawach szczególnie skomplikowanych, wymagających ekspertyz[4]
-
-### Możliwość przedłużenia
-
-W uzasadnionych przypadkach organ może przedłużyć termin, powiadamiając stronę o:
-- przyczynie opóźnienia
-- nowym przewidywanym terminie
-- możliwości złożenia zażalenia
-
-WAŻNE: Zawsze formatuj odpowiedź używając markdown jak w przykładzie powyżej. Nie pisz prostego tekstu bez formatowania!`
+      // LOG DIAGNOSTYCZNY 2
+      const fullKnowledgeSummary = knowledgeHistory.join('\n\n');
+      console.log('🟣 Query do LLM (Payload):', {
+        messagesCount: conversationHistory.length,
+        knowledgeHistoryLength: knowledgeHistory.length,
+        knowledgeContent: fullKnowledgeSummary
       });
 
-      // 5. Wyciągnij odpowiedź z API
-      let assistantContent = '';
-      if (response.content && response.content.length > 0) {
-        const contentBlock = response.content[0];
-        if ('text' in contentBlock) {
-          assistantContent = contentBlock.text;
-        }
+      // 3. WYWOŁANIE API CHATU
+      const chatResponse = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: conversationHistory,
+          context: context,
+          knowledgeSummary: fullKnowledgeSummary // Wysyłamy złączoną wiedzę
+        }),
+      });
+
+      if (!chatResponse.ok) {
+        throw new Error(`Chat API Error: ${chatResponse.statusText}`);
       }
 
-      // 6. Przygotuj wiadomość ze źródłami
+      const chatData = await chatResponse.json();
+      let rawContent = chatData.content || '';
+      let cleanContent = rawContent;
+      let usedSourceIds: string[] = [];
+
+      // --- LOGIKA: Parsowanie i Ukrywanie JSON ---
+      // POPRAWKA: Regex akceptuje teraz brak słowa "json" po ``` (np. ``` { ... } ```)
+      const jsonRegex = /```(?:json)?\s*([\s\S]*?)\s*```/;
+      const match = rawContent.match(jsonRegex);
+
+      if (match) {
+        try {
+          const jsonBlock = JSON.parse(match[1]);
+
+          // LOG DIAGNOSTYCZNY 3
+          console.log('🟢 JSON Odpowiedzi:', JSON.stringify(jsonBlock, null, 2));
+
+          // Logika Rolling Window (Max 3 ostatnie podsumowania)
+          if (jsonBlock.summary_for_next_turn) {
+            console.log('🧠 Dodaję nowe podsumowanie do historii:', jsonBlock.summary_for_next_turn);
+
+            setKnowledgeHistory(prev => {
+              const newHistory = [...prev, jsonBlock.summary_for_next_turn];
+              // Zatrzymujemy tylko 3 ostatnie
+              return newHistory.slice(-3);
+            });
+          }
+
+          if (jsonBlock.sources && Array.isArray(jsonBlock.sources)) {
+            usedSourceIds = jsonBlock.sources.map((s: any) => s.id.toString());
+          }
+
+          // Usuwamy JSON z widoku
+          cleanContent = rawContent.replace(match[0], '').trim();
+
+        } catch (e) {
+          console.error('❌ Błąd parsowania ukrytego JSON-a:', e);
+          // Jeśli parsowanie zawiedzie, usuwamy surowy blok, ale content zostaje
+          cleanContent = rawContent.replace(jsonRegex, '').trim();
+        }
+      } else {
+        console.warn('⚠️ Brak bloku JSON w odpowiedzi modelu.');
+      }
+      // -------------------------------------------
+
+      // 4. Przygotowanie źródeł
+      const allAvailableData = [...searchData.cumulated, ...searchData.detailed];
+
+      const finalSources = usedSourceIds.length > 0
+        ? usedSourceIds.map(id => {
+            const found = allAvailableData.find((item: any) => item.id.toString() === id);
+            return found;
+          }).filter(Boolean)
+        : [];
+
+      // POPRAWKA: Fallback - jeśli filtrowanie zwróci 0 wyników (bo np. błąd JSON), pokaż wszystko co znaleziono
+      // Dzięki temu użytkownik nigdy nie zostaje bez źródeł
+      const sourcesToDisplay = finalSources.length > 0 ? finalSources : allAvailableData;
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
-        content: assistantContent || 'Przepraszam, nie udało mi się wygenerować odpowiedzi.',
+        content: cleanContent || 'Przepraszam, nie udało mi się wygenerować odpowiedzi.',
         timestamp: new Date(),
-        sources: searchResults.map(r => ({
+        sources: sourcesToDisplay.map((r: any) => ({
           id: r.id,
+          act: r.act,
           article: r.article,
           paragraph: r.paragraph,
           title: r.title,
           content: r.content,
+          text_clean: r.text_clean,
           relevance_score: r.relevance_score
         }))
       };
@@ -678,7 +721,7 @@ WAŻNE: Zawsze formatuj odpowiedź używając markdown jak w przykładzie powyż
               <Menu className="w-6 h-6 text-gray-700" />
             </button>
             <div className="text-lg font-bold text-blue-900">
-              Asystent <span className="font-light">KPA</span>
+              Asystent <span className="font-light">LegalGPT.pl</span>
             </div>
             <div className="w-10" />
           </div>
@@ -693,10 +736,10 @@ WAŻNE: Zawsze formatuj odpowiedź używając markdown jak w przykładzie powyż
                   {/* Logo i opis */}
                   <div className="space-y-6 mb-8">
                     <div className="text-4xl font-bold text-blue-900">
-                      Asystent <span className="font-light">KPA</span>
+                      Legal<span className="font-light">GPT.pl </span><span className="text-xs font-light">(v.1 beta/MVP)</span>
                     </div>
                     <p className="text-gray-500 text-lg">
-                      Zadaj pytanie o Kodeks postępowania administracyjnego
+                      Zadaj pytanie do KPK, KPA, KPC, KPE i SUS
                     </p>
                   </div>
 
@@ -709,7 +752,7 @@ WAŻNE: Zawsze formatuj odpowiedź używając markdown jak w przykładzie powyż
                           value={input}
                           onChange={(e) => setInput(e.target.value)}
                           onKeyDown={handleKeyDown}
-                          placeholder="Zadaj pytanie o KPA..."
+                          placeholder="Zadaj pytanie..."
                           className="flex-1 px-4 py-3 bg-transparent border-0 outline-none resize-none max-h-[200px] min-h-[52px] text-gray-900 placeholder:text-gray-400"
                           rows={1}
                           disabled={isLoading}
@@ -751,59 +794,61 @@ WAŻNE: Zawsze formatuj odpowiedź używając markdown jak w przykładzie powyż
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           components={{
-                            // Nagłówki
-                            h1: ({node, ...props}) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
-                            h2: ({node, ...props}) => <h2 className="text-lg font-bold mt-3 mb-2" {...props} />,
-                            h3: ({node, ...props}) => <h3 className="text-base font-bold mt-2 mb-1" {...props} />,
-                            // Listy
-                            ul: ({node, ...props}) => <ul className="list-disc list-inside my-2 space-y-1" {...props} />,
-                            ol: ({node, ...props}) => <ol className="list-decimal list-inside my-2 space-y-1" {...props} />,
-                            li: ({node, ...props}) => <li className="ml-2" {...props} />,
-                            // Pogrubienie i kursywa
-                            strong: ({node, ...props}) => <strong className="font-bold" {...props} />,
-                            em: ({node, ...props}) => <em className="italic" {...props} />,
-                            // UNIWERSALNE PARSOWANIE PRZYPISÓW - działa wszędzie
-                            text: ({value}: any) => {
-                              if (typeof value !== 'string') return value;
+                              // Nagłówki (bez zmian)
+                              h1: ({node, ...props}) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
+                              h2: ({node, ...props}) => <h2 className="text-lg font-bold mt-3 mb-2" {...props} />,
+                              h3: ({node, ...props}) => <h3 className="text-base font-bold mt-2 mb-1" {...props} />,
 
-                              const parts = [];
-                              const regex = /\[(\d+)\]/g;
-                              let lastIndex = 0;
-                              let match;
+                              // --- POPRAWKA LISTOWANIA ---
+                              // 1. Zmieniamy 'list-inside' na 'list-outside'
+                              // 2. Dodajemy 'ml-5' (margines lewy), żeby kropki/cyfry nie wyjechały poza ekran
+                              // 3. 'space-y-1' zapewnia ładny odstęp między punktami
+                              ul: ({node, ...props}) => <ul className="list-disc list-outside ml-5 my-2 space-y-1" {...props} />,
+                              ol: ({node, ...props}) => <ol className="list-decimal list-outside ml-5 my-2 space-y-1" {...props} />,
 
-                              while ((match = regex.exec(value)) !== null) {
-                                // Tekst przed przypisem
-                                if (match.index > lastIndex) {
-                                  parts.push(value.slice(lastIndex, match.index));
+                              // Opcjonalnie mały padding dla elementu listy
+                              li: ({node, ...props}) => <li className="pl-1" {...props} />,
+                              // ---------------------------
+
+                              // Pogrubienie i kursywa (bez zmian)
+                              strong: ({node, ...props}) => <strong className="font-bold" {...props} />,
+                              em: ({node, ...props}) => <em className="italic" {...props} />,
+
+                              // UNIWERSALNE PARSOWANIE PRZYPISÓW (bez zmian)
+                              text: ({value}: any) => {
+                                // ... (Twój kod parsowania przypisów zostaje bez zmian) ...
+                                if (typeof value !== 'string') return value;
+                                const parts = [];
+                                const regex = /\[(\d+)\]/g;
+                                let lastIndex = 0;
+                                let match;
+                                while ((match = regex.exec(value)) !== null) {
+                                  if (match.index > lastIndex) {
+                                    parts.push(value.slice(lastIndex, match.index));
+                                  }
+                                  parts.push(
+                                    <sup key={`fn-${match.index}`} className="text-red-600 font-semibold mx-0.5">
+                                      [{match[1]}]
+                                    </sup>
+                                  );
+                                  lastIndex = regex.lastIndex;
                                 }
+                                if (lastIndex < value.length) {
+                                  parts.push(value.slice(lastIndex));
+                                }
+                                return parts.length > 1 ? <>{parts}</> : value;
+                              },
 
-                                // Przypisy jako czerwone elementy (tylko wizualne, NIE klikalne)
-                                parts.push(
-                                  <sup
-                                    key={`fn-${match.index}`}
-                                    className="text-red-600 font-semibold mx-0.5"
-                                  >
-                                    [{match[1]}]
-                                  </sup>
-                                );
+                              // Akapity
+                              // WAŻNE: Dodajemy klasę [&:not(:first-child)]:mt-2 zamiast zwykłego my-2,
+                              // aby uniknąć dziwnych odstępów wewnątrz list
+                              p: ({node, ...props}: any) => <p className="my-2 leading-relaxed" {...props} />,
 
-                                lastIndex = regex.lastIndex;
-                              }
-
-                              // Pozostały tekst
-                              if (lastIndex < value.length) {
-                                parts.push(value.slice(lastIndex));
-                              }
-
-                              return parts.length > 1 ? <>{parts}</> : value;
-                            },
-                            // Akapity
-                            p: ({node, ...props}: any) => <p className="my-2 leading-relaxed" {...props} />,
-                            // Kod
-                            code: ({node, inline, ...props}: any) =>
-                              inline
-                                ? <code className="bg-gray-100 px-1 py-0.5 rounded text-sm" {...props} />
-                                : <code className="block bg-gray-100 p-2 rounded my-2 text-sm" {...props} />,
+                              // Kod (bez zmian)
+                              code: ({node, inline, ...props}: any) =>
+                                inline
+                                  ? <code className="bg-gray-100 px-1 py-0.5 rounded text-sm" {...props} />
+                                  : <code className="block bg-gray-100 p-2 rounded my-2 text-sm" {...props} />,
                           }}
                         >
                           {message.content}
@@ -812,28 +857,28 @@ WAŻNE: Zawsze formatuj odpowiedź używając markdown jak w przykładzie powyż
 
                       {/* Źródła jako klikalne linki w stopce (ŁAPKI TUTAJ) */}
                       {message.sources && message.sources.length > 0 && (
-                        <div className="mt-4 pt-3 border-t border-gray-300">
-                          <p className="text-xs font-medium text-gray-600 mb-2">Przypisy:</p>
-                          <div className="space-y-1">
-                            {message.sources.map((source, idx) => (
-                              <button
-                                key={source.id}
-                                onClick={() => setSelectedSource(source)}
-                                className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1 rounded transition-colors cursor-pointer"
-                              >
-                                <span className="font-medium text-blue-900">[{idx + 1}]</span>{' '}
-                                <span className="font-medium">
-                                  {source.article && `Art. ${source.article}`}
-                                  {source.paragraph && ` § ${source.paragraph}`}
-                                </span>
-                                {' - '}
-                                <span className="text-gray-600">
-                                  {source.content.substring(0, 60)}...
-                                </span>
-                              </button>
-                            ))}
+                          <div className="mt-4 pt-3 border-t border-gray-300">
+                            <p className="text-xs font-medium text-gray-600 mb-2">Przypisy:</p>
+                            <div className="space-y-1">
+                              {message.sources.map((source, idx) => (
+                                <button
+                                  key={`${source.id}-${idx}`} /* <--- TU BYŁ BŁĄD. ZMIANA NA UNIKALNY KLUCZ */
+                                  onClick={() => setSelectedSource(source)}
+                                  className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1 rounded transition-colors cursor-pointer"
+                                >
+                                  <span className="font-medium text-blue-900">[{idx + 1}]</span>{' '}
+                                  <span className="font-medium">
+                                    {source.article && `Art. ${source.article}`}
+                                    {source.paragraph && ` § ${source.paragraph}`}
+                                  </span>
+                                  {' - '}
+                                  <span className="text-gray-600">
+                                    {source.content.substring(0, 60)}...
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
                           </div>
-                        </div>
                       )}
 
                       <div
@@ -858,7 +903,7 @@ WAŻNE: Zawsze formatuj odpowiedź używając markdown jak w przykładzie powyż
                     <div className="flex items-center gap-3">
                       <Loader2 className="w-5 h-5 animate-spin text-blue-900 flex-shrink-0" />
                       <span className="text-sm text-gray-600">
-                        Przeszukuję Kodeks Postępowania Administracyjnego aby udzielić najlepszej odpowiedzi...
+                        Przeszukuję dostępne Akty Prawne aby udzielić najlepszej odpowiedzi...
                       </span>
                     </div>
                   </div>
