@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm';
 
 interface Source {
   id: string;
+  type?: 'c' | 's';
   act?: string;
   article?: string;
   paragraph?: string;
@@ -53,17 +54,28 @@ interface ContextFragment {
   text_clean: string;
 }
 
+// PROFESJONALNY SourceCard - wersja FINALNA
+// Zastąp stary SourceCard w ChatInterface.tsx tym kodem
+
+// Mapowanie skrótów na pełne nazwy aktów
+const ACT_FULL_NAMES: Record<string, string> = {
+  'KPC': 'Kodeks Postępowania Cywilnego',
+  'KPK': 'Kodeks Postępowania Karnego',
+  'KPA': 'Kodeks Postępowania Administracyjnego',
+  'KPE': 'Kodeks Postępowania Egzekucyjnego',
+  'SUS': 'Ustawa o Systemie Ubezpieczeń Społecznych',
+  'KK': 'Kodeks Karny'
+};
+
 interface SourceCardProps {
   source: Source;
   onClose: () => void;
 }
 
 const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
-  const [context, setContext] = useState<{
-    before: ContextFragment[];
-    current: ContextFragment | null;
-    after: ContextFragment[];
-  }>({ before: [], current: null, after: [] });
+  const [fragments, setFragments] = useState<ContextFragment[]>([]);
+  const [highlightParagraph, setHighlightParagraph] = useState<string | null>(null);
+  const [highlightPoint, setHighlightPoint] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -89,7 +101,9 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
       }
 
       const data = await response.json();
-      setContext(data);
+      setFragments(data.fragments || []);
+      setHighlightParagraph(data.highlightParagraph);
+      setHighlightPoint(data.highlightPoint);
     } catch (error) {
       console.error('❌ Błąd ładowania kontekstu:', error);
     } finally {
@@ -97,117 +111,261 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
     }
   };
 
-  const renderFragment = (fragment: ContextFragment, isCurrent = false) => {
-    const label = [
-      fragment.act,
-      fragment.art_no ? `Art. ${fragment.art_no}` : '',
-      fragment.par_no ? `§ ${fragment.par_no}` : '',
-      fragment.pkt_no ? `pkt ${fragment.pkt_no}` : ''
-    ].filter(Boolean).join(' ') || 'Fragment';
+  const isHighlighted = (fragment: ContextFragment): boolean => {
+    const hasRealPar = !!(fragment.par_no &&
+                      fragment.par_no !== 'cumulated' &&
+                      fragment.par_no !== 'moved');
+    const hasRealPkt = !!(fragment.pkt_no &&
+                      fragment.pkt_no !== 'cumulated' &&
+                      fragment.pkt_no !== 'moved');
+
+    // Przypadek 1: Brak paragraph i point → zaznacz tylko tytuł artykułu
+    if (!highlightParagraph && !highlightPoint) {
+      return !hasRealPar && !hasRealPkt;
+    }
+
+    // Przypadek 2: Jest point → zaznacz TYLKO ten punkt
+    if (highlightPoint) {
+      return hasRealPar &&
+             hasRealPkt &&
+             fragment.par_no === highlightParagraph &&
+             fragment.pkt_no === highlightPoint;
+    }
+
+    // Przypadek 3: Jest paragraph ale NIE MA point → zaznacz CAŁY paragraf (z punktami)
+    if (highlightParagraph) {
+      return hasRealPar && fragment.par_no === highlightParagraph;
+      // To zaznacza zarówno główną treść paragrafu jak i wszystkie punkty w nim
+    }
+
+    return false;
+  };
+
+  // Grupuj fragmenty według struktury
+  const groupedFragments = fragments.reduce((acc, fragment) => {
+      if (!fragment.par_no || fragment.par_no === 'cumulated' || fragment.par_no === 'moved') {
+        if (!acc.articleTitle) {  // Weź pierwszy fragment bez par_no jako tytuł
+          acc.articleTitle = fragment;
+        }
+      } else {
+      const parKey = fragment.par_no;
+      if (!acc.paragraphs[parKey]) {
+        acc.paragraphs[parKey] = { main: null, points: [] };
+      }
+
+      if (!fragment.pkt_no || fragment.pkt_no === 'cumulated' || fragment.pkt_no === 'moved') {
+        acc.paragraphs[parKey].main = fragment;
+      } else {
+        acc.paragraphs[parKey].points.push(fragment);
+      }
+    }
+    return acc;
+  }, { articleTitle: null, paragraphs: {} } as {
+    articleTitle: ContextFragment | null;
+    paragraphs: Record<string, { main: ContextFragment | null; points: ContextFragment[] }>;
+  });
+
+  // Pobierz pełną nazwę aktu
+  const fullActName = source.act ? (ACT_FULL_NAMES[source.act] || source.act) : '';
+
+  const renderArticleTitle = () => {
+      if (!groupedFragments.articleTitle) {
+        // Jeśli nie ma tytułu w fragmentach, nie renderuj nic
+        return null;
+      }
+
+    const fragment = groupedFragments.articleTitle;
+    const highlighted = isHighlighted(fragment);
 
     return (
-      <div
-        className={`p-4 rounded-lg ${
-          isCurrent
-            ? 'bg-blue-50 border-2 border-blue-500'
-            : 'bg-gray-50 border border-gray-200'
-        }`}
-      >
-        <div className={`text-sm font-bold mb-2 ${
-          isCurrent ? 'text-blue-900' : 'text-gray-700'
-        }`}>
-          {isCurrent && '► '}{label}
+      <div className={`mb-8 pb-6 border-b-2 ${
+        highlighted ? 'border-blue-300' : 'border-gray-200'
+      }`}>
+        <div className="text-center mb-4">
+          <div className="inline-block">
+            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+              Artykuł
+            </div>
+            <div className={`text-3xl font-bold ${
+              highlighted ? 'text-blue-900' : 'text-gray-800'
+            }`}>
+              {source.article}
+            </div>
+          </div>
         </div>
-        <p className={`text-sm leading-relaxed ${
-          isCurrent ? 'text-gray-900' : 'text-gray-600'
+        <div className={`rounded-xl p-6 ${
+          highlighted
+            ? 'bg-blue-50 border border-blue-200 shadow-sm'
+            : 'bg-gray-50 border border-gray-200'
         }`}>
-          {fragment.text}
-        </p>
+          {highlighted && (
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
+              <span className="text-xs font-semibold text-blue-800 uppercase tracking-wider">
+                Użyty fragment
+              </span>
+            </div>
+          )}
+          <p className={`text-base leading-relaxed ${
+            highlighted ? 'text-gray-900 font-medium' : 'text-gray-700'
+          }`}>
+            {fragment.text}
+          </p>
+        </div>
+      </div>
+    );
+  };
+
+  const renderParagraph = (parNo: string, data: { main: ContextFragment | null; points: ContextFragment[] }) => {
+    const mainHighlighted = data.main ? isHighlighted(data.main) : false;
+
+    return (
+      <div key={parNo} className="mb-6">
+        {/* Nagłówek paragrafu */}
+        <div className={`flex items-center gap-3 mb-3 pl-4 ${
+          mainHighlighted ? 'opacity-100' : 'opacity-80'
+        }`}>
+          <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+            mainHighlighted
+              ? 'bg-blue-900 text-white shadow-lg'
+              : 'bg-gray-200 text-gray-700'
+          }`}>
+            <span className="text-sm font-bold">§</span>
+          </div>
+          <div className={`text-2xl font-bold ${
+            mainHighlighted ? 'text-blue-900' : 'text-gray-700'
+          }`}>
+            {parNo}
+          </div>
+        </div>
+
+        {/* Treść paragrafu */}
+        {data.main && (
+          <div className={`ml-4 pl-8 border-l-4 rounded-r-xl p-4 mb-3 transition-all ${
+            mainHighlighted
+              ? 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 shadow-md'
+              : 'border-gray-300 bg-white hover:bg-gray-50'
+          }`}>
+            {mainHighlighted && (
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                <span className="text-xs font-semibold text-blue-900 uppercase tracking-wider">
+                  Użyty fragment
+                </span>
+              </div>
+            )}
+            <p className={`text-base leading-relaxed ${
+              mainHighlighted ? 'text-gray-900 font-medium' : 'text-gray-700'
+            }`}>
+              {data.main.text}
+            </p>
+          </div>
+        )}
+
+        {/* Punkty w paragrafie */}
+        {data.points.length > 0 && (
+          <div className="ml-12 space-y-2">
+            {data.points.map((point) => {
+              const pointHighlighted = isHighlighted(point);
+              return (
+                <div
+                  key={point.id}
+                  className={`pl-6 border-l-2 rounded-r-lg p-3 transition-all ${
+                    pointHighlighted
+                      ? 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 shadow-md'
+                      : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-md text-xs font-bold ${
+                      pointHighlighted
+                        ? 'bg-blue-900 text-white'
+                        : 'bg-gray-300 text-gray-700'
+                    }`}>
+                      {point.pkt_no}
+                    </div>
+                    <p className={`text-sm leading-relaxed flex-1 ${
+                      pointHighlighted ? 'text-gray-900 font-medium' : 'text-gray-600'
+                    }`}>
+                      {point.text}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-lg w-full max-w-[90vw] max-h-[90vh] flex flex-col my-8 overflow-hidden shadow-xl">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col my-8 overflow-hidden shadow-2xl">
         {/* Header */}
-        <div className="flex justify-between items-center p-4 border-b border-gray-200">
-          <h2 className="text-lg font-bold text-blue-900">
-            Kontekst - {source.act && `${source.act} `}
-            {source.article && `Art. ${source.article}`}
-            {source.paragraph && ` § ${source.paragraph}`}
-            {source.point && ` pkt ${source.point}`}
-          </h2>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
+        <div className="relative bg-gradient-to-r from-blue-900 to-blue-800 text-white p-6">
+          <div className="flex justify-between items-start">
+            <div>
+              <div className="text-sm font-medium opacity-90 mb-1">
+                {fullActName}
+              </div>
+              <h2 className="text-2xl font-bold">
+                Art. {source.article}
+                {highlightParagraph && ` § ${highlightParagraph}`}
+                {highlightPoint && ` pkt ${highlightPoint}`}
+              </h2>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-white/20 rounded-full transition-all"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto" style={{
+        <div className="flex-1 overflow-y-auto bg-gray-50" style={{
           scrollbarWidth: 'thin',
-          scrollbarColor: '#d1d5db #f3f4f6'
+          scrollbarColor: '#cbd5e1 #f1f5f9'
         }}>
           {isLoading ? (
-            <div className="flex items-center justify-center p-8">
-              <Loader2 className="w-8 h-8 animate-spin text-blue-900" />
+            <div className="flex flex-col items-center justify-center p-12">
+              <Loader2 className="w-12 h-12 animate-spin text-blue-900 mb-4" />
+              <p className="text-gray-600">Ładowanie treści artykułu...</p>
+            </div>
+          ) : fragments.length > 0 ? (
+            <div className="p-8">
+              {/* Tytuł artykułu */}
+              {renderArticleTitle()}
+
+              {/* Paragrafy */}
+              <div className="space-y-6">
+                {Object.entries(groupedFragments.paragraphs)
+                  .sort(([a], [b]) => {
+                    const numA = parseInt(a);
+                    const numB = parseInt(b);
+                    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                    return a.localeCompare(b);
+                  })
+                  .map(([parNo, data]) => renderParagraph(parNo, data))}
+              </div>
             </div>
           ) : (
-            <div className="px-8 py-6 space-y-3">
-              {/* Fragmenty przed */}
-              {context.before.length > 0 && (
-                <>
-                  <div className="text-xs text-gray-500 uppercase font-medium mb-2">
-                    Poprzednie fragmenty:
-                  </div>
-                  {context.before.map((fragment) => (
-                    <div key={`before-${fragment.id}`}>
-                      {renderFragment(fragment, false)}
-                    </div>
-                  ))}
-                  <div className="my-2 border-t border-gray-300" />
-                </>
-              )}
-
-              {/* Wybrany fragment */}
-              {context.current && (
-                <>
-                  <div className="text-xs text-blue-900 uppercase font-medium mb-2">
-                    Wybrany fragment:
-                  </div>
-                  <div key="current">
-                    {renderFragment(context.current, true)}
-                  </div>
-                </>
-              )}
-
-              {/* Fragmenty po */}
-              {context.after.length > 0 && (
-                <>
-                  <div className="my-2 border-t border-gray-300" />
-                  <div className="text-xs text-gray-500 uppercase font-medium mb-2">
-                    Następne fragmenty:
-                  </div>
-                  {context.after.map((fragment) => (
-                    <div key={`after-${fragment.id}`}>
-                      {renderFragment(fragment, false)}
-                    </div>
-                  ))}
-                </>
-              )}
-
-              {source.relevance_score && (
-                <div className="mt-4 p-3 bg-blue-50 rounded-lg border-t border-gray-200">
-                  <p className="text-sm text-gray-600">
-                    Trafność wyszukiwania: {(source.relevance_score * 100).toFixed(1)}%
-                  </p>
-                </div>
-              )}
+            <div className="flex flex-col items-center justify-center p-12 text-gray-500">
+              <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-4">
+                <span className="text-3xl">📄</span>
+              </div>
+              <p className="text-lg font-medium">Nie znaleziono treści artykułu</p>
             </div>
           )}
+        </div>
+
+        {/* Footer - subtelna stopka */}
+        <div className="bg-gradient-to-r from-gray-50 to-gray-100 border-t border-gray-200 px-6 py-3">
+          <p className="text-center text-xs text-gray-500">
+            <span className="font-semibold text-gray-700">LegalGPT.pl</span> - Twój partner w codziennej pracy z Aktami Prawnymi
+          </p>
         </div>
       </div>
     </div>
@@ -678,6 +836,7 @@ const ChatInterface: React.FC = () => {
         timestamp: new Date(),
         sources: sourcesToDisplay.map((r: any) => ({
           id: r.id,
+          type: r.type,
           act: r.act,
           article: r.article,
           paragraph: r.paragraph,
@@ -773,7 +932,7 @@ const ChatInterface: React.FC = () => {
                   {/* Logo i opis */}
                   <div className="space-y-6 mb-8">
                     <div className="text-4xl font-bold text-blue-900">
-                      Legal<span className="font-light">GPT.pl </span><span className="text-xs font-light">(v.1 beta/MVP)</span>
+                      Legal<span className="font-light">GPT.pl </span><span className="text-xs font-light">(v.2 beta/MVP)</span>
                     </div>
                     <p className="text-gray-500 text-lg">
                       Zadaj pytanie do KPK, KPA, KPC, KPE i SUS
@@ -898,26 +1057,36 @@ const ChatInterface: React.FC = () => {
                             <p className="text-xs font-medium text-gray-600 mb-2">Przypisy:</p>
                             <div className="space-y-1">
                               {message.sources.map((source, idx) => {
-                                // Budowanie pełnej etykiety z aktem i punktami
-                                const label = [
-                                  source.act,
-                                  source.article && `Art. ${source.article}`,
-                                  source.paragraph && `§ ${source.paragraph}`,
-                                  source.point && `pkt ${source.point}`
-                                ].filter(Boolean).join(' ');
-
                                 return (
                                   <button
                                     key={`${source.id}-${idx}`}
                                     onClick={() => setSelectedSource(source)}
-                                    className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1 rounded transition-colors cursor-pointer"
+                                    className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1.5 rounded transition-colors cursor-pointer"
                                   >
-                                    <span className="font-medium text-blue-900">[{idx + 1}]</span>{' '}
-                                    <span className="font-medium">{label}</span>
-                                    {' - '}
-                                    <span className="text-gray-600">
-                                      {source.content.substring(0, 60)}...
-                                    </span>
+                                    <div className="flex items-start gap-1.5">
+                                      {/* Numer przypisu */}
+                                      <span className="font-medium text-blue-900 shrink-0">[{idx + 1}]</span>
+
+                                      {/* Typ */}
+                                      <span className="font-medium shrink-0">({source.type || '?'})</span>
+
+                                      {/* Nazwa aktu */}
+                                      {source.act && (
+                                        <span className="font-medium shrink-0">{source.act}</span>
+                                      )}
+
+                                      {/* Numer artykułu */}
+                                      {source.article && (
+                                        <span className="font-medium shrink-0">Art. {source.article}</span>
+                                      )}
+
+                                      <span className="shrink-0">-</span>
+
+                                      {/* Treść */}
+                                      <span className="text-gray-600 flex-1 min-w-0 line-clamp-2 sm:line-clamp-2 md:line-clamp-1">
+                                        {source.content}
+                                      </span>
+                                    </div>
                                   </button>
                                 );
                               })}

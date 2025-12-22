@@ -1,5 +1,5 @@
 // PLIK: src/app/api/context/route.ts
-// WERSJA 2.1 - Dodano fallback dla art_no (nawiasy)
+// WERSJA 3.0 - Pobiera CAŁY artykuł zamiast 3+1+3
 import { NextResponse } from 'next/server';
 import { Pool } from 'pg';
 
@@ -12,11 +12,11 @@ export async function POST(req: Request) {
     const { act, article, paragraph, point } = await req.json();
 
     console.log('\n==================== [API CONTEXT START] ====================');
-    console.log('📍 Żądanie kontekstu dla:');
+    console.log('🔍 Żądanie kontekstu dla:');
     console.log(`   Act: ${act || 'NULL'}`);
     console.log(`   Art (input): ${article || 'NULL'}`);
-    console.log(`   Par: ${paragraph || 'NULL'}`);
-    console.log(`   Pkt: ${point || 'NULL'}`);
+    console.log(`   Par (input): ${paragraph || 'NULL'}`);
+    console.log(`   Pkt (input): ${point || 'NULL'}`);
 
     if (!act || !article) {
       return NextResponse.json(
@@ -26,13 +26,13 @@ export async function POST(req: Request) {
     }
 
     // =========================================================================
-    // KROK 1: Znajdź dokładny rekord (current) z obsługą FALLBACK dla art_no
+    // KROK 1: Znajdź artykuł z obsługą FALLBACK dla art_no
     // =========================================================================
 
-    let currentResult: any = { rows: [] };
     let foundArticleVariant = null;
+    let allFragments: any[] = [];
 
-    // Próbujemy 4 podejścia:
+    // Próbujemy 4 warianty art_no:
     // i=0: Oryginał (np. "115320")
     // i=1: Ostatni znak w nawias (np. "11532(0)")
     // i=2: Ostatnie 2 znaki w nawias (np. "1153(20)")
@@ -42,9 +42,7 @@ export async function POST(req: Request) {
       let candidateArticle = article;
 
       if (i > 0) {
-        // Zabezpieczenie: jeśli artykuł jest krótszy niż liczba znaków do przeniesienia, przerywamy
         if (article.length <= i) break;
-
         const mainPart = article.slice(0, article.length - i);
         const parenPart = article.slice(article.length - i);
         candidateArticle = `${mainPart}(${parenPart})`;
@@ -52,108 +50,99 @@ export async function POST(req: Request) {
 
       console.log(`\n🔍 Próba ${i + 1}/4: Szukam Art. "${candidateArticle}"...`);
 
-      let currentSql = '';
-      let currentParams: any[] = [];
+      // Pobierz WSZYSTKIE fragmenty artykułu
+      const sql = `
+        SELECT id, act, art_no, par_no, pkt_no, text, text_clean
+        FROM context
+        WHERE act = $1 AND art_no = $2
+        ORDER BY id ASC;
+      `;
 
-      if (point) {
-        currentSql = `
-          SELECT id, act, art_no, par_no, pkt_no, text, text_clean
-          FROM context
-          WHERE act = $1 AND art_no = $2 AND par_no = $3 AND pkt_no = $4
-          LIMIT 1;
-        `;
-        currentParams = [act, candidateArticle, paragraph, point];
-      } else if (paragraph) {
-        currentSql = `
-          SELECT id, act, art_no, par_no, pkt_no, text, text_clean
-          FROM context
-          WHERE act = $1 AND art_no = $2 AND par_no = $3 AND pkt_no IS NULL
-          LIMIT 1;
-        `;
-        currentParams = [act, candidateArticle, paragraph];
-      } else {
-        currentSql = `
-          SELECT id, act, art_no, par_no, pkt_no, text, text_clean
-          FROM context
-          WHERE act = $1 AND art_no = $2 AND par_no IS NULL AND pkt_no IS NULL
-          LIMIT 1;
-        `;
-        currentParams = [act, candidateArticle];
-      }
-
-      const result = await pool.query(currentSql, currentParams);
+      const result = await pool.query(sql, [act, candidateArticle]);
 
       if (result.rows.length > 0) {
-        currentResult = result;
+        allFragments = result.rows;
         foundArticleVariant = candidateArticle;
-        console.log(`✅ SUKCES! Znaleziono przy wariancie: "${candidateArticle}"`);
-        break; // Przerywamy pętlę, bo znaleźliśmy
+        console.log(`✅ SUKCES! Znaleziono ${allFragments.length} fragmentów artykułu "${candidateArticle}"`);
+        break;
       } else {
         console.log(`   Nie znaleziono.`);
       }
     }
 
-    if (currentResult.rows.length === 0) {
-      console.log('❌ Ostatecznie nie znaleziono fragmentu po wszystkich próbach.');
+    if (allFragments.length === 0) {
+      console.log('❌ Ostatecznie nie znaleziono artykułu po wszystkich próbach.');
       console.log('==================== [API CONTEXT END] ====================\n');
       return NextResponse.json({
-        before: [],
-        current: null,
-        after: []
+        fragments: [],
+        highlightParagraph: null,
+        highlightPoint: null
       });
     }
 
-    const current = currentResult.rows[0];
-    const currentId = current.id;
-
-    console.log(`✅ ID rekordu: ${currentId}`);
-
     // =========================================================================
-    // KROK 2: Pobierz fragmenty PRZED (previous)
+    // KROK 2: Znajdź pasujący fragment i wyekstrahuj DOKŁADNE wartości par_no/pkt_no
     // =========================================================================
 
-    const beforeSql = `
-      SELECT id, act, art_no, par_no, pkt_no, text, text_clean
-      FROM context
-      WHERE act = $1 AND id < $2
-      ORDER BY id DESC
-      LIMIT 3;
-    `;
+    let highlightParagraph: string | null = null;
+    let highlightPoint: string | null = null;
 
-    console.log('\n⬅️  Pobieram 3 fragmenty przed...');
-    const beforeResult = await pool.query(beforeSql, [act, currentId]);
-    const before = beforeResult.rows.reverse();
+    console.log(`\n🔍 Szukam fragmentu do zaznaczenia:`);
+    console.log(`   paragraph (input): "${paragraph || 'NULL'}"`);
+    console.log(`   point (input): "${point || 'NULL'}"`);
 
-    console.log(`   Znaleziono: ${before.length} fragmentów`);
-    before.forEach(row => {
-      const label = formatLabel(row);
-      console.log(`   • ${label}`);
-    });
+    if (paragraph) {
+      // KROK A: Znajdź fragment który pasuje do inputowego paragraph
+      // Próbujemy różnych wariantów (z nawiasami, bez, cyfry rzymskie)
+      const matchingFragment = allFragments.find(f => {
+        if (!f.par_no || f.par_no === 'cumulated' || f.par_no === 'moved') {
+          return false;
+        }
+
+        // Porównaj różne warianty:
+        return f.par_no === paragraph ||           // "1" === "1"
+               f.par_no === `(${paragraph})` ||    // "(1)" vs "1"
+               f.par_no === paragraph.replace(/[()]/g, '') || // "1" vs "(1)"
+               f.par_no.replace(/[()]/g, '') === paragraph.replace(/[()]/g, ''); // normalize both
+      });
+
+      if (matchingFragment) {
+        // UŻYJ DOKŁADNEJ WARTOŚCI Z BAZY
+        highlightParagraph = matchingFragment.par_no;
+        console.log(`✅ Znaleziono paragraf w bazie: "${highlightParagraph}"`);
+
+        // KROK B: Jeśli jest point, znajdź go też
+        if (point) {
+          const matchingPoint = allFragments.find(f =>
+            f.par_no === highlightParagraph &&
+            f.pkt_no &&
+            f.pkt_no !== 'cumulated' &&
+            f.pkt_no !== 'moved' &&
+            f.pkt_no === point
+          );
+
+          if (matchingPoint) {
+            highlightPoint = matchingPoint.pkt_no;
+            console.log(`✅ Znaleziono punkt w bazie: "${highlightPoint}"`);
+          } else {
+            console.log(`⚠️ Nie znaleziono punktu: "${point}"`);
+          }
+        }
+      } else {
+        console.log(`⚠️ Nie znaleziono paragrafu pasującego do: "${paragraph}"`);
+        console.log(`   Dostępne par_no w fragmentach:`);
+        allFragments.forEach(f => {
+          if (f.par_no && f.par_no !== 'cumulated' && f.par_no !== 'moved') {
+            console.log(`     - "${f.par_no}"`);
+          }
+        });
+      }
+    } else {
+      console.log(`ℹ️ Brak paragrafu - zaznaczamy tytuł artykułu`);
+    }
 
     // =========================================================================
-    // KROK 3: Pobierz fragmenty PO (next)
-    // =========================================================================
-
-    const afterSql = `
-      SELECT id, act, art_no, par_no, pkt_no, text, text_clean
-      FROM context
-      WHERE act = $1 AND id > $2
-      ORDER BY id ASC
-      LIMIT 3;
-    `;
-
-    console.log('\n➡️  Pobieram 3 fragmenty po...');
-    const afterResult = await pool.query(afterSql, [act, currentId]);
-    const after = afterResult.rows;
-
-    console.log(`   Znaleziono: ${after.length} fragmentów`);
-    after.forEach(row => {
-      const label = formatLabel(row);
-      console.log(`   • ${label}`);
-    });
-
-    // =========================================================================
-    // KROK 4: Formatowanie wyników
+    // KROK 3: Formatowanie wyników
     // =========================================================================
 
     const formatRow = (row: any) => ({
@@ -167,15 +156,45 @@ export async function POST(req: Request) {
     });
 
     const response = {
-      before: before.map(formatRow),
-      current: formatRow(current),
-      after: after.map(formatRow)
+      fragments: allFragments.map(formatRow),
+      highlightParagraph: highlightParagraph,
+      highlightPoint: highlightPoint
     };
 
     console.log('\n📦 WYNIK:');
-    console.log(`   Przed: ${response.before.length}`);
-    console.log(`   Bieżący: ✓ (Art. ${foundArticleVariant})`);
-    console.log(`   Po: ${response.after.length}`);
+    console.log(`   Artykuł: ${foundArticleVariant}`);
+    console.log(`   Fragmentów: ${response.fragments.length}`);
+    if (highlightParagraph && highlightPoint) {
+      console.log(`   Zaznacz: § ${highlightParagraph} pkt ${highlightPoint} (TYLKO PUNKT)`);
+    } else if (highlightParagraph) {
+      console.log(`   Zaznacz: CAŁY § ${highlightParagraph} (wraz z punktami)`);
+    } else {
+      console.log(`   Zaznacz: Tytuł artykułu`);
+    }
+
+    // Log fragmentów z oznaczeniem co będzie podświetlone
+    allFragments.forEach(row => {
+      const label = formatLabel(row);
+      const hasRealPar = row.par_no && row.par_no !== 'cumulated' && row.par_no !== 'moved';
+      const hasRealPkt = row.pkt_no && row.pkt_no !== 'cumulated' && row.pkt_no !== 'moved';
+
+      let isHighlight = false;
+      if (!highlightParagraph && !highlightPoint) {
+        // Zaznacz tytuł artykułu
+        isHighlight = !hasRealPar && !hasRealPkt;
+      } else if (highlightPoint) {
+        // Zaznacz konkretny punkt
+        isHighlight = hasRealPar && hasRealPkt &&
+                     row.par_no === highlightParagraph &&
+                     row.pkt_no === highlightPoint;
+      } else if (highlightParagraph) {
+        // Zaznacz cały paragraf (z punktami)
+        isHighlight = hasRealPar && row.par_no === highlightParagraph;
+      }
+
+      console.log(`   ${isHighlight ? '► ' : '  '}${label}`);
+    });
+
     console.log('==================== [API CONTEXT END] ====================\n');
 
     return NextResponse.json(response);

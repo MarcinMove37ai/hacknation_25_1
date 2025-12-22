@@ -36,13 +36,18 @@ const mapRow = (row: any, type: string) => {
   const titleParts = [];
   if (row.act) titleParts.push(row.act);
   if (row.art_no) titleParts.push(`Art. ${row.art_no}`);
-  // Ukrywamy par/pkt jeśli są oznaczone jako 'cumulated', żeby nie wyświetlać "§ cumulated"
-  if (row.par_no && row.par_no !== 'cumulated' && row.par_no !== 'moved') titleParts.push(`§ ${row.par_no}`);
-  if (row.pkt_no && row.pkt_no !== 'cumulated' && row.pkt_no !== 'moved') titleParts.push(`pkt ${row.pkt_no}`);
+
+  // Ukrywamy par/pkt jeśli są oznaczone jako 'cumulated' lub 'moved'
+  if (row.par_no && row.par_no !== 'cumulated' && row.par_no !== 'moved') {
+    titleParts.push(`§ ${row.par_no}`);
+  }
+  if (row.pkt_no && row.pkt_no !== 'cumulated' && row.pkt_no !== 'moved') {
+    titleParts.push(`pkt ${row.pkt_no}`);
+  }
 
   return {
     id: row.id.toString(),
-    type: type,
+    type: type, // 'c' dla cumulated, 's' dla single
     act: row.act,
     article: row.art_no,
     paragraph: (row.par_no === 'cumulated' || row.par_no === 'moved') ? null : row.par_no,
@@ -50,7 +55,7 @@ const mapRow = (row: any, type: string) => {
     title: titleParts.join(' ') || 'Fragment aktu prawnego',
     content: row.text,
     text_clean: row.text_clean,
-    relevance_score: row.similarity // Przekazujemy score (dla dzieci będzie to score rodzica)
+    relevance_score: row.similarity
   };
 };
 
@@ -70,111 +75,57 @@ export async function POST(req: Request) {
     const vectorString = JSON.stringify(queryEmbedding);
 
     // 2. Przygotowanie zapytań wektorowych (RÓWNOLEGLE)
+    // WSZYSTKO Z JEDNEJ TABELI: acts_cumulated
 
-    // A. Szukamy ogółów w acts_cumulated
+    // A. SKUMULOWANE: gdzie par_no='cumulated' LUB pkt_no='cumulated'
     const sqlCumulatedSearch = `
       SELECT id, act, art_no, par_no, pkt_no, text, text_clean,
              1 - (embedding <=> $1::vector) as similarity
       FROM acts_cumulated
-      ORDER BY embedding <=> $1::vector
-      LIMIT 5;
-    `;
-
-    // B. Szukamy szczegółów w acts
-    const sqlActsSearch = `
-      SELECT id, act, art_no, par_no, pkt_no, text, text_clean,
-             1 - (embedding <=> $1::vector) as similarity
-      FROM acts
+      WHERE par_no = 'cumulated' OR pkt_no = 'cumulated'
       ORDER BY embedding <=> $1::vector
       LIMIT 10;
     `;
 
-    // 3. Wykonanie obu wyszukiwań na raz
-    const [resCumulatedVector, resActsVector] = await Promise.all([
+    // B. POJEDYNCZE: gdzie ani par_no ani pkt_no NIE są 'cumulated'
+    const sqlSingleSearch = `
+      SELECT id, act, art_no, par_no, pkt_no, text, text_clean,
+             1 - (embedding <=> $1::vector) as similarity
+      FROM acts_cumulated
+      WHERE COALESCE(par_no, '') != 'cumulated'
+        AND COALESCE(pkt_no, '') != 'cumulated'
+      ORDER BY embedding <=> $1::vector
+      LIMIT 10;
+    `;
+
+    // 3. Wykonanie obu wyszukiwań równolegle
+    const [resCumulated, resSingle] = await Promise.all([
       pool.query(sqlCumulatedSearch, [vectorString]),
-      pool.query(sqlActsSearch, [vectorString])
+      pool.query(sqlSingleSearch, [vectorString])
     ]);
 
-    console.log(`\n📊 WYNIKI WEKTOROWE:`);
-    console.log(`   • acts_cumulated: ${resCumulatedVector.rows.length}`);
-    console.log(`   • acts: ${resActsVector.rows.length}`);
+    console.log(`\n📊 WYNIKI WEKTOROWE (z acts_cumulated):`);
+    console.log(`   • Skumulowane (par_no/pkt_no='cumulated'): ${resCumulated.rows.length}`);
+    console.log(`   • Pojedyncze (bez 'cumulated'): ${resSingle.rows.length}`);
 
-    // 4. Przetwarzanie wyników z acts_cumulated -> DEKOMPOZYCJA przez tabelę CONTEXT
-    const processedCumulated = [];
-    console.log(`\n🔄 DEKOMPOZYCJA (z tabeli context):`);
+    // 4. Przetwarzanie wyników - proste mapowanie bez dekompozycji
+    const cumulatedResults = resCumulated.rows.map(row => mapRow(row, 'c'));
+    const singleResults = resSingle.rows.map(row => mapRow(row, 's'));
 
-    for (const row of resCumulatedVector.rows) {
-      const isArticleLevel = row.par_no === 'cumulated' && row.pkt_no === 'cumulated';
-      const isParagraphLevel = row.par_no !== 'cumulated' && row.pkt_no === 'cumulated';
-      // Uwaga: Może być też wariant, że par_no = 'cumulated', a pkt_no jest NULL (zależy jak masz w bazie)
+    console.log(`\n✅ Przetworzono:`);
+    console.log(`   • ${cumulatedResults.length} wyników skumulowanych (type: c)`);
+    console.log(`   • ${singleResults.length} wyników pojedynczych (type: s)`);
 
-      let decompositionSql = '';
-      let queryParams: any[] = [];
-      let logMsg = '';
+    const responseData = {
+      cumulated: cumulatedResults,
+      detailed: singleResults
+    };
 
-      // Budujemy zapytanie do tabeli CONTEXT (zwykły SQL, nie wektorowy)
-      if (row.par_no === 'cumulated') {
-        // -- Poziom Artykułu: Pobierz wszystkie paragrafy z context --
-        decompositionSql = `
-          SELECT id, act, art_no, par_no, pkt_no, text, text_clean
-          FROM context
-          WHERE act = $1 AND art_no = $2
-          AND (par_no != 'cumulated' OR par_no IS NULL) -- pomijamy nagłówki
-          ORDER BY id ASC;
-        `;
-        queryParams = [row.act, row.art_no];
-        logMsg = `[${row.act} Art. ${row.art_no}] (cumulated) → Pobieram dzieci z context`;
-
-      } else if (row.pkt_no === 'cumulated') {
-        // -- Poziom Paragrafu: Pobierz wszystkie punkty z context --
-        decompositionSql = `
-          SELECT id, act, art_no, par_no, pkt_no, text, text_clean
-          FROM context
-          WHERE act = $1 AND art_no = $2 AND par_no = $3
-          AND (pkt_no != 'cumulated' OR pkt_no IS NULL)
-          ORDER BY id ASC;
-        `;
-        queryParams = [row.act, row.art_no, row.par_no];
-        logMsg = `[${row.act} Art. ${row.art_no} §${row.par_no}] (cumulated) → Pobieram dzieci z context`;
-      } else {
-        // Przypadek brzegowy: rekord w acts_cumulated nie ma flagi 'cumulated'?
-        // Traktujemy jak zwykły rekord, ale to nie powinno się zdarzyć w tej tabeli.
-        decompositionSql = '';
-      }
-
-      if (decompositionSql) {
-        console.log(`   🔸 ${logMsg}`);
-        const contextRes = await pool.query(decompositionSql, queryParams);
-
-        if (contextRes.rows.length > 0) {
-          console.log(`      ↳ Znaleziono ${contextRes.rows.length} elementów w context.`);
-          for (const childRow of contextRes.rows) {
-            // Dziecko dziedziczy similarity rodzica (żeby frontend wiedział jak sortować grupę)
-            childRow.similarity = row.similarity;
-            processedCumulated.push(mapRow(childRow, 'expanded'));
-          }
-        } else {
-          // Fallback: jeśli context jest pusty, zwracamy sam nagłówek
-          console.log(`      ⚠️  Brak danych w context. Zwracam nagłówek.`);
-          processedCumulated.push(mapRow(row, 'cumulated'));
-        }
-      } else {
-         // Rekord z acts_cumulated bez flag cumulated? Zwracamy jak jest.
-         processedCumulated.push(mapRow(row, 'cumulated'));
-      }
-    }
-
-    // 5. Przetwarzanie wyników z acts (zwykłe)
-    // Tu po prostu mapujemy to, co przyszło z bazy
-    const detailedResults = resActsVector.rows.map(row => mapRow(row, 'ori'));
-    console.log(`   ✓ Przetworzono ${detailedResults.length} wyników bezpośrednich z acts.`);
-
+    console.log('\n📤 ZWRACANA ODPOWIEDŹ:');
+    console.log(JSON.stringify(responseData, null, 2));
     console.log('==================== [API SEARCH END] ====================\n');
 
-    return NextResponse.json({
-      cumulated: processedCumulated,
-      detailed: detailedResults
-    });
+    return NextResponse.json(responseData);
 
   } catch (error) {
     console.error("❌ Database Search API Error:", error);
