@@ -61,7 +61,7 @@ const mapRow = (row: any, type: string) => {
 
 export async function POST(req: Request) {
   try {
-    const { query } = await req.json();
+    const { query, selectedActs } = await req.json();
 
     if (!query) {
       return NextResponse.json({ error: "Brak zapytania" }, { status: 400 });
@@ -69,12 +69,23 @@ export async function POST(req: Request) {
 
     console.log('\n==================== [API SEARCH START] ====================');
     console.log('🔍 Pytanie:', query);
+    console.log('📚 Wybrane akty:', selectedActs || 'wszystkie');
 
     // 1. Generowanie embeddingu
     const queryEmbedding = await getVoyageEmbedding(query);
     const vectorString = JSON.stringify(queryEmbedding);
 
-    // 2. Przygotowanie zapytań wektorowych (RÓWNOLEGLE)
+    // 2. Przygotowanie warunku filtrowania aktów
+    let actFilter = '';
+    let actFilterParams: any[] = [vectorString];
+
+    if (selectedActs && selectedActs.length > 0) {
+      // Filtrujemy tylko po wybranych aktach
+      actFilter = `AND act = ANY($2::text[])`;
+      actFilterParams.push(selectedActs);
+    }
+
+    // 3. Przygotowanie zapytań wektorowych (RÓWNOLEGLE)
     // WSZYSTKO Z JEDNEJ TABELI: acts_cumulated
 
     // A. SKUMULOWANE: gdzie par_no='cumulated' LUB pkt_no='cumulated'
@@ -82,7 +93,8 @@ export async function POST(req: Request) {
       SELECT id, act, art_no, par_no, pkt_no, text, text_clean,
              1 - (embedding <=> $1::vector) as similarity
       FROM acts_cumulated
-      WHERE par_no = 'cumulated' OR pkt_no = 'cumulated'
+      WHERE (par_no = 'cumulated' OR pkt_no = 'cumulated')
+      ${actFilter}
       ORDER BY embedding <=> $1::vector
       LIMIT 10;
     `;
@@ -94,15 +106,20 @@ export async function POST(req: Request) {
       FROM acts_cumulated
       WHERE COALESCE(par_no, '') != 'cumulated'
         AND COALESCE(pkt_no, '') != 'cumulated'
+      ${actFilter}
       ORDER BY embedding <=> $1::vector
       LIMIT 10;
     `;
 
-    // 3. Wykonanie obu wyszukiwań równolegle
+    // 4. Wykonanie obu wyszukiwań równolegle
     const [resCumulated, resSingle] = await Promise.all([
-      pool.query(sqlCumulatedSearch, [vectorString]),
-      pool.query(sqlSingleSearch, [vectorString])
+      pool.query(sqlCumulatedSearch, actFilterParams),
+      pool.query(sqlSingleSearch, actFilterParams)
     ]);
+
+    console.log(`\n📊 WYNIKI WEKTOROWE (z acts_cumulated):`);
+    console.log(`   • Skumulowane (par_no/pkt_no='cumulated'): ${resCumulated.rows.length}`);
+    console.log(`   • Pojedyncze (bez 'cumulated'): ${resSingle.rows.length}`);
 
     console.log(`\n📊 WYNIKI WEKTOROWE (z acts_cumulated):`);
     console.log(`   • Skumulowane (par_no/pkt_no='cumulated'): ${resCumulated.rows.length}`);

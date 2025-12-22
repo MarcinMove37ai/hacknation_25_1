@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, MessageSquarePlus, X, Trash2, Menu } from 'lucide-react';
+import { Send, Loader2, MessageSquarePlus, X, Trash2, Menu, ChevronDown, ChevronUp } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { loadKPAData, type KPAChunk } from '@/utils/semanticSearch';
 import ReactMarkdown from 'react-markdown';
@@ -38,6 +38,88 @@ interface Chat {
   createdAt: Date;
 }
 
+// Interfejs dla wzbogaconego source z modelu
+interface ModelSource {
+  index: number;
+  id: string;
+  description: string;
+}
+
+// Funkcja do parsowania § i pkt z description
+function extractParPktFromDescription(description: string): { paragraph: string | null; point: string | null } {
+  // Przykłady:
+  // "Art. 15 § 1 KPE - ..." → paragraph: "1"
+  // "Art. 27 § 1 pkt 9 KPE - ..." → paragraph: "1", point: "9"
+
+  const parMatch = description.match(/§\s*(\d+[a-z]?|\([0-9]+\)|[IVXLCDM]+)/i);
+  const pktMatch = description.match(/pkt\s*(\d+[a-z]?)/i);
+
+  return {
+    paragraph: parMatch ? parMatch[1] : null,
+    point: pktMatch ? pktMatch[1] : null
+  };
+}
+
+// Funkcja do wzbogacania sources
+async function enrichSourceWithContext(
+  source: any,
+  modelSource: ModelSource
+): Promise<any> {
+  // Parsuj description aby wyekstrahować § i pkt
+  const extracted = extractParPktFromDescription(modelSource.description);
+
+  // Sprawdź czy search nie miał tych danych
+  const needsEnrichment =
+    (extracted.paragraph && !source.paragraph) ||
+    (extracted.point && !source.point);
+
+  if (!needsEnrichment) {
+    return source; // Nie trzeba nic robić
+  }
+
+  try {
+    // Pobierz dokładny tekst z /api/context
+    const contextResponse = await fetch('/api/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        act: source.act,
+        article: source.article,
+        paragraph: extracted.paragraph,
+        point: extracted.point
+      })
+    });
+
+    if (!contextResponse.ok) {
+      console.warn(`⚠️ Nie udało się pobrać kontekstu dla source ${source.id}`);
+      return source;
+    }
+
+    const contextData = await contextResponse.json();
+
+    // Znajdź dokładny fragment
+    const exactFragment = contextData.fragments.find((f: any) =>
+      f.par_no === extracted.paragraph &&
+      (!extracted.point || f.pkt_no === extracted.point)
+    );
+
+    if (exactFragment) {
+      console.log(`✅ Wzbogacono source ${source.id}: dodano § ${extracted.paragraph}${extracted.point ? ` pkt ${extracted.point}` : ''}`);
+      return {
+        ...source,
+        paragraph: extracted.paragraph || source.paragraph,
+        point: extracted.point || source.point,
+        content: exactFragment.text || source.content
+      };
+    }
+
+  } catch (error) {
+    console.error(`❌ Błąd wzbogacania source ${source.id}:`, error);
+  }
+
+  return source;
+}
+
 // ============================================================================
 // NOWY KOMPONENT ŹRÓDŁA (POPUP) - UŻYWA /api/context API
 // ============================================================================
@@ -66,6 +148,72 @@ const ACT_FULL_NAMES: Record<string, string> = {
   'SUS': 'Ustawa o Systemie Ubezpieczeń Społecznych',
   'KK': 'Kodeks Karny'
 };
+
+// Komponent rozwijalnej sekcji - elegancki i wyrazisty
+interface CollapsibleSectionProps {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}
+
+const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({ title, children, defaultOpen = false }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <div className="mt-4">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-all duration-200 group border border-gray-200 cursor-pointer"
+      >
+        <span className="text-sm font-semibold text-gray-700 group-hover:text-gray-900">{title}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 group-hover:text-gray-700">
+            {isOpen ? 'Zwiń' : 'Rozwiń'}
+          </span>
+          {isOpen ? (
+            <ChevronUp className="w-4 h-4 text-gray-600 group-hover:text-gray-800 transition-transform" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-gray-600 group-hover:text-gray-800 transition-transform" />
+          )}
+        </div>
+      </button>
+      {isOpen && (
+        <div className="mt-2 px-4 py-3 bg-gray-50/50 rounded-lg border border-gray-100">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Funkcja pomocnicza do parsowania odpowiedzi asystenta
+function parseAssistantResponse(content: string): {
+  justification: string;
+  summary: string;
+} {
+  // Szukamy "Podsumowując:" lub podobnych wariantów
+  const summaryMatch = content.match(/(Podsumowując|Podsumowanie|W skrócie|Konkludując):?\s*/im);
+
+  if (summaryMatch && summaryMatch.index !== undefined) {
+    // Justification: od początku DO "Podsumowując:" (bez tego słowa)
+    const justification = content.substring(0, summaryMatch.index).trim();
+
+    // Summary: od "Podsumowując:" DO struktury JSON, ale BEZ słowa "Podsumowując:"
+    let summaryStart = summaryMatch.index + summaryMatch[0].length;
+    let summaryContent = content.substring(summaryStart);
+
+    // Usuń strukturę JSON z końca (jeśli istnieje)
+    const jsonMatch = summaryContent.match(/```json[\s\S]*```\s*$/m);
+    if (jsonMatch && jsonMatch.index !== undefined) {
+      summaryContent = summaryContent.substring(0, jsonMatch.index).trim();
+    }
+
+    return { justification, summary: summaryContent.trim() };
+  }
+
+  // Jeśli nie znaleziono "Podsumowując", zwróć całą treść jako odpowiedź
+  return { justification: '', summary: content };
+}
 
 interface SourceCardProps {
   source: Source;
@@ -111,7 +259,7 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
     }
   };
 
-  const isHighlighted = (fragment: ContextFragment): boolean => {
+  const getHighlightLevel = (fragment: ContextFragment): 'none' | 'subtle' | 'full' => {
     const hasRealPar = !!(fragment.par_no &&
                       fragment.par_no !== 'cumulated' &&
                       fragment.par_no !== 'moved');
@@ -119,49 +267,68 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
                       fragment.pkt_no !== 'cumulated' &&
                       fragment.pkt_no !== 'moved');
 
-    // Przypadek 1: Brak paragraph i point → zaznacz tylko tytuł artykułu
+    // Przypadek 1: Brak paragraph i point → subtelne zaznaczenie całego artykułu
     if (!highlightParagraph && !highlightPoint) {
-      return !hasRealPar && !hasRealPkt;
+      return 'subtle';
     }
 
-    // Przypadek 2: Jest point → zaznacz TYLKO ten punkt
+    // Przypadek 2: Jest point → pełne zaznaczenie TYLKO tego punktu
     if (highlightPoint) {
-      return hasRealPar &&
+      const matches = hasRealPar &&
              hasRealPkt &&
              fragment.par_no === highlightParagraph &&
              fragment.pkt_no === highlightPoint;
+      return matches ? 'full' : 'none';
     }
 
-    // Przypadek 3: Jest paragraph ale NIE MA point → zaznacz CAŁY paragraf (z punktami)
+    // Przypadek 3: Jest paragraph ale NIE MA point → pełne zaznaczenie całego paragrafu
     if (highlightParagraph) {
-      return hasRealPar && fragment.par_no === highlightParagraph;
-      // To zaznacza zarówno główną treść paragrafu jak i wszystkie punkty w nim
+      const matches = hasRealPar && fragment.par_no === highlightParagraph;
+      return matches ? 'full' : 'none';
     }
 
-    return false;
+    return 'none';
+  };
+
+  const isHighlighted = (fragment: ContextFragment): boolean => {
+    return getHighlightLevel(fragment) !== 'none';
   };
 
   // Grupuj fragmenty według struktury
   const groupedFragments = fragments.reduce((acc, fragment) => {
-      if (!fragment.par_no || fragment.par_no === 'cumulated' || fragment.par_no === 'moved') {
-        if (!acc.articleTitle) {  // Weź pierwszy fragment bez par_no jako tytuł
+      // Przypadek 1: Fragment bez par_no i bez pkt_no → tytuł artykułu
+      if ((!fragment.par_no || fragment.par_no === 'cumulated' || fragment.par_no === 'moved') &&
+          (!fragment.pkt_no || fragment.pkt_no === 'cumulated' || fragment.pkt_no === 'moved')) {
+        if (!acc.articleTitle) {
           acc.articleTitle = fragment;
         }
-      } else {
-      const parKey = fragment.par_no;
-      if (!acc.paragraphs[parKey]) {
-        acc.paragraphs[parKey] = { main: null, points: [] };
       }
+      // Przypadek 2: Fragment ma pkt_no ale NIE MA par_no → punkt bezpośrednio pod artykułem
+      else if ((!fragment.par_no || fragment.par_no === 'cumulated' || fragment.par_no === 'moved') &&
+               fragment.pkt_no && fragment.pkt_no !== 'cumulated' && fragment.pkt_no !== 'moved') {
+        acc.articlePoints.push(fragment);
+      }
+      // Przypadek 3: Fragment ma par_no → normalny paragraf lub punkt w paragrafie
+      else if (fragment.par_no && fragment.par_no !== 'cumulated' && fragment.par_no !== 'moved') {
+        const parKey = fragment.par_no;
+        if (!acc.paragraphs[parKey]) {
+          acc.paragraphs[parKey] = { main: null, points: [] };
+        }
 
-      if (!fragment.pkt_no || fragment.pkt_no === 'cumulated' || fragment.pkt_no === 'moved') {
-        acc.paragraphs[parKey].main = fragment;
-      } else {
-        acc.paragraphs[parKey].points.push(fragment);
+        if (!fragment.pkt_no || fragment.pkt_no === 'cumulated' || fragment.pkt_no === 'moved') {
+          acc.paragraphs[parKey].main = fragment;
+        } else {
+          acc.paragraphs[parKey].points.push(fragment);
+        }
       }
-    }
     return acc;
-  }, { articleTitle: null, paragraphs: {} } as {
+  }, {
+    articleTitle: null,
+    articlePoints: [],
+    paragraphs: {}
+  } as {
     articleTitle: ContextFragment | null;
+    articlePoints: ContextFragment[];
     paragraphs: Record<string, { main: ContextFragment | null; points: ContextFragment[] }>;
   });
 
@@ -175,39 +342,21 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
       }
 
     const fragment = groupedFragments.articleTitle;
-    const highlighted = isHighlighted(fragment);
+    const highlightLevel = getHighlightLevel(fragment);
+    const highlighted = highlightLevel !== 'none';
+    const isSubtle = highlightLevel === 'subtle';
 
     return (
-      <div className={`mb-8 pb-6 border-b-2 ${
-        highlighted ? 'border-blue-300' : 'border-gray-200'
-      }`}>
-        <div className="text-center mb-4">
-          <div className="inline-block">
-            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-              Artykuł
-            </div>
-            <div className={`text-3xl font-bold ${
-              highlighted ? 'text-blue-900' : 'text-gray-800'
-            }`}>
-              {source.article}
-            </div>
-          </div>
-        </div>
+      <div className="mb-8">
         <div className={`rounded-xl p-6 ${
           highlighted
-            ? 'bg-blue-50 border border-blue-200 shadow-sm'
+            ? (isSubtle
+                ? 'bg-blue-50/30 border border-blue-100 shadow-sm'
+                : 'bg-blue-50 border border-blue-200 shadow-sm')
             : 'bg-gray-50 border border-gray-200'
         }`}>
-          {highlighted && (
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
-              <span className="text-xs font-semibold text-blue-800 uppercase tracking-wider">
-                Użyty fragment
-              </span>
-            </div>
-          )}
           <p className={`text-base leading-relaxed ${
-            highlighted ? 'text-gray-900 font-medium' : 'text-gray-700'
+            highlighted ? (isSubtle ? 'text-gray-800' : 'text-gray-900 font-medium') : 'text-gray-700'
           }`}>
             {fragment.text}
           </p>
@@ -217,7 +366,9 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
   };
 
   const renderParagraph = (parNo: string, data: { main: ContextFragment | null; points: ContextFragment[] }) => {
-    const mainHighlighted = data.main ? isHighlighted(data.main) : false;
+    const mainHighlightLevel = data.main ? getHighlightLevel(data.main) : 'none';
+    const mainHighlighted = mainHighlightLevel !== 'none';
+    const isMainSubtle = mainHighlightLevel === 'subtle';
 
     return (
       <div key={parNo} className="mb-6">
@@ -227,13 +378,15 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
         }`}>
           <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
             mainHighlighted
-              ? 'bg-blue-900 text-white shadow-lg'
+              ? (isMainSubtle ? 'bg-blue-700 text-white shadow-md' : 'bg-blue-900 text-white shadow-lg')
               : 'bg-gray-200 text-gray-700'
           }`}>
             <span className="text-sm font-bold">§</span>
           </div>
           <div className={`text-2xl font-bold ${
-            mainHighlighted ? 'text-blue-900' : 'text-gray-700'
+            mainHighlighted
+              ? (isMainSubtle ? 'text-blue-800' : 'text-blue-900')
+              : 'text-gray-700'
           }`}>
             {parNo}
           </div>
@@ -243,19 +396,15 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
         {data.main && (
           <div className={`ml-4 pl-8 border-l-4 rounded-r-xl p-4 mb-3 transition-all ${
             mainHighlighted
-              ? 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 shadow-md'
+              ? (isMainSubtle
+                  ? 'border-blue-300 bg-gradient-to-r from-blue-50/30 to-blue-50 shadow-sm'
+                  : 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 shadow-md')
               : 'border-gray-300 bg-white hover:bg-gray-50'
           }`}>
-            {mainHighlighted && (
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                <span className="text-xs font-semibold text-blue-900 uppercase tracking-wider">
-                  Użyty fragment
-                </span>
-              </div>
-            )}
             <p className={`text-base leading-relaxed ${
-              mainHighlighted ? 'text-gray-900 font-medium' : 'text-gray-700'
+              mainHighlighted
+                ? (isMainSubtle ? 'text-gray-800' : 'text-gray-900 font-medium')
+                : 'text-gray-700'
             }`}>
               {data.main.text}
             </p>
@@ -266,26 +415,33 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
         {data.points.length > 0 && (
           <div className="ml-12 space-y-2">
             {data.points.map((point) => {
-              const pointHighlighted = isHighlighted(point);
+              const pointHighlightLevel = getHighlightLevel(point);
+              const pointHighlighted = pointHighlightLevel !== 'none';
+              const isPointSubtle = pointHighlightLevel === 'subtle';
+
               return (
                 <div
                   key={point.id}
                   className={`pl-6 border-l-2 rounded-r-lg p-3 transition-all ${
                     pointHighlighted
-                      ? 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 shadow-md'
+                      ? (isPointSubtle
+                          ? 'border-blue-300 bg-gradient-to-r from-blue-50/30 to-blue-50 shadow-sm'
+                          : 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 shadow-md')
                       : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
                   }`}
                 >
                   <div className="flex items-start gap-3">
                     <div className={`flex-shrink-0 flex items-center justify-center w-7 h-7 rounded-md text-xs font-bold ${
                       pointHighlighted
-                        ? 'bg-blue-900 text-white'
+                        ? (isPointSubtle ? 'bg-blue-700 text-white' : 'bg-blue-900 text-white')
                         : 'bg-gray-300 text-gray-700'
                     }`}>
                       {point.pkt_no}
                     </div>
                     <p className={`text-sm leading-relaxed flex-1 ${
-                      pointHighlighted ? 'text-gray-900 font-medium' : 'text-gray-600'
+                      pointHighlighted
+                        ? (isPointSubtle ? 'text-gray-800' : 'text-gray-900 font-medium')
+                        : 'text-gray-600'
                     }`}>
                       {point.text}
                     </p>
@@ -330,14 +486,57 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
           scrollbarColor: '#cbd5e1 #f1f5f9'
         }}>
           {isLoading ? (
-            <div className="flex flex-col items-center justify-center p-12">
+            <div className="flex flex-col items-center justify-center p-12 w-full min-h-full">
               <Loader2 className="w-12 h-12 animate-spin text-blue-900 mb-4" />
               <p className="text-gray-600">Ładowanie treści artykułu...</p>
             </div>
           ) : fragments.length > 0 ? (
-            <div className="p-8">
+            <div className="p-8 w-full min-h-full flex flex-col justify-center">
               {/* Tytuł artykułu */}
               {renderArticleTitle()}
+
+              {/* Punkty bezpośrednio pod artykułem (bez paragrafów) */}
+              {groupedFragments.articlePoints.length > 0 && (
+                <div className="mb-8 space-y-3">
+                  {groupedFragments.articlePoints.map((point) => {
+                    const pointHighlightLevel = getHighlightLevel(point);
+                    const pointHighlighted = pointHighlightLevel !== 'none';
+                    const isPointSubtle = pointHighlightLevel === 'subtle';
+
+                    return (
+                      <div
+                        key={point.id}
+                        className={`ml-4 pl-6 border-l-3 rounded-r-xl p-4 transition-all ${
+                          pointHighlighted
+                            ? (isPointSubtle
+                                ? 'border-blue-300 bg-gradient-to-r from-blue-50/30 to-blue-50 shadow-sm'
+                                : 'border-blue-500 bg-gradient-to-r from-blue-50 to-blue-100 shadow-md')
+                            : 'border-gray-300 bg-gray-50 hover:bg-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-lg text-sm font-bold ${
+                            pointHighlighted
+                              ? (isPointSubtle ? 'bg-blue-700 text-white' : 'bg-blue-900 text-white')
+                              : 'bg-gray-400 text-white'
+                          }`}>
+                            {point.pkt_no}
+                          </div>
+                          <div className="flex-1">
+                            <p className={`text-base leading-relaxed ${
+                              pointHighlighted
+                                ? (isPointSubtle ? 'text-gray-800' : 'text-gray-900 font-medium')
+                                : 'text-gray-700'
+                            }`}>
+                              {point.text}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Paragrafy */}
               <div className="space-y-6">
@@ -352,7 +551,7 @@ const SourceCard: React.FC<SourceCardProps> = ({ source, onClose }) => {
               </div>
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center p-12 text-gray-500">
+            <div className="flex flex-col items-center justify-center p-12 text-gray-500 w-full min-h-full">
               <div className="w-16 h-16 bg-gray-200 rounded-full flex items-center justify-center mb-4">
                 <span className="text-3xl">📄</span>
               </div>
@@ -557,6 +756,16 @@ const ChatInterface: React.FC = () => {
   const [isMobile, setIsMobile] = useState(false);
   const [kpaData, setKpaData] = useState<KPAChunk[]>([]);
 
+  // Filtry aktów prawnych
+  const [selectedActs, setSelectedActs] = useState({
+    KPK: true,
+    KPA: true,
+    KPC: true,
+    KPE: true,
+    SUS: true,
+    KK: false // Kodeks Karny - wkrótce
+  });
+
   // Zmiana: Przechowujemy historię wiedzy jako tablicę (do 3 ostatnich wpisów)
   const [knowledgeHistory, setKnowledgeHistory] = useState<string[]>([]);
 
@@ -712,7 +921,10 @@ const ChatInterface: React.FC = () => {
       const searchResponse = await fetch('/api/acts-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: queryForSearch }),
+        body: JSON.stringify({
+          query: queryForSearch,
+          selectedActs: Object.keys(selectedActs).filter(act => selectedActs[act as keyof typeof selectedActs])
+        }),
       });
 
       if (!searchResponse.ok) {
@@ -776,6 +988,7 @@ const ChatInterface: React.FC = () => {
       let rawContent = chatData.content || '';
       let cleanContent = rawContent;
       let usedSourceIds: string[] = [];
+      let finalSources: any[] = []; // DODAJ TUTAJ DEKLARACJĘ
 
       // --- LOGIKA: Parsowanie i Ukrywanie JSON ---
       // POPRAWKA: Regex akceptuje teraz brak słowa "json" po ``` (np. ``` { ... } ```)
@@ -802,6 +1015,36 @@ const ChatInterface: React.FC = () => {
 
           if (jsonBlock.sources && Array.isArray(jsonBlock.sources)) {
             usedSourceIds = jsonBlock.sources.map((s: any) => s.id.toString());
+
+            // NOWE: Zapisz pełne źródła z modelu (z description)
+            const modelSources: ModelSource[] = jsonBlock.sources.map((s: any) => ({
+              index: s.index,
+              id: s.id.toString(),
+              description: s.description || ''
+            }));
+
+            // Przygotowanie źródeł z wzbogacaniem
+            const allAvailableData = [...searchData.cumulated, ...searchData.detailed];
+
+            const baseSources = usedSourceIds.map(id => {
+              const found = allAvailableData.find((item: any) => item.id.toString() === id);
+              return found;
+            }).filter(Boolean);
+
+            // WZBOGACANIE: Sprawdź każde źródło czy potrzebuje dodatkowego kontekstu
+            console.log('🔍 Sprawdzam czy sources potrzebują wzbogacenia...');
+            const enrichedSources = await Promise.all(
+              baseSources.map(async (source, idx) => {
+                const modelSource = modelSources[idx];
+                if (modelSource) {
+                  return await enrichSourceWithContext(source, modelSource);
+                }
+                return source;
+              })
+            );
+
+            // Użyj wzbogaconych sources
+            finalSources = enrichedSources;
           }
 
           // Usuwamy JSON z widoku
@@ -817,16 +1060,7 @@ const ChatInterface: React.FC = () => {
       }
       // -------------------------------------------
 
-      // 4. Przygotowanie źródeł
-      const allAvailableData = [...searchData.cumulated, ...searchData.detailed];
-
-      const finalSources = usedSourceIds.length > 0
-        ? usedSourceIds.map(id => {
-            const found = allAvailableData.find((item: any) => item.id.toString() === id);
-            return found;
-          }).filter(Boolean)
-        : [];
-
+      // 4. Przygotowanie źródeł (finalSources już ustawione w bloku parsowania JSON)
       const sourcesToDisplay = finalSources;
 
       const assistantMessage: Message = {
@@ -923,6 +1157,37 @@ const ChatInterface: React.FC = () => {
           </div>
         )}
 
+        {/* Banner z aktywnymi aktami prawnymi - pokazuje się tylko gdy są wiadomości */}
+        {messages.length > 0 && (
+          <div className="bg-white border-b border-gray-200 px-4 py-2.5 sticky top-0 z-10">
+            <div className="max-w-6xl mx-auto flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-medium text-gray-600">
+                <span className="hidden md:inline">Aktywne Akty Prawne:</span>
+                <span className="md:hidden">Aktywne:</span>
+              </span>
+              {Object.entries(selectedActs)
+                .filter(([_, isSelected]) => isSelected)
+                .map(([act]) => (
+                  <span
+                    key={act}
+                    className="relative px-2.5 py-1 bg-gray-100 text-gray-700 text-xs font-medium rounded-md border border-gray-200 cursor-default group"
+                    title={ACT_FULL_NAMES[act] || act}
+                  >
+                    {act}
+                    {/* Tooltip */}
+                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-white text-gray-700 text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap shadow-lg border border-gray-200">
+                      {ACT_FULL_NAMES[act] || act}
+                      {/* Strzałka */}
+                      <span className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
+                        <span className="block w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-white"></span>
+                      </span>
+                    </span>
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
+
         {/* Obszar wiadomości */}
         <div className="flex-1 overflow-hidden">
           <ScrollArea className="h-full" ref={scrollAreaRef}>
@@ -932,11 +1197,168 @@ const ChatInterface: React.FC = () => {
                   {/* Logo i opis */}
                   <div className="space-y-6 mb-8">
                     <div className="text-4xl font-bold text-blue-900">
-                      Legal<span className="font-light">GPT.pl </span><span className="text-xs font-light">(v.2 beta/MVP)</span>
+                      Legal<span className="font-light">GPT.pl </span><span className="text-xs font-light">(v.3 beta/MVP)</span>
                     </div>
-                    <p className="text-gray-500 text-lg">
-                      Zadaj pytanie do KPK, KPA, KPC, KPE i SUS
-                    </p>
+
+                    {/* Filtry aktów prawnych */}
+                    <div className="max-w-3xl mx-auto">
+                      <p className="text-gray-600 text-sm mb-4">Wybierz akty prawne do przeszukania:</p>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                        {/* KPK */}
+                        <button
+                          onClick={() => setSelectedActs(prev => ({ ...prev, KPK: !prev.KPK }))}
+                          className={`px-4 py-2.5 rounded-lg border transition-all ${
+                            selectedActs.KPK
+                              ? 'border-blue-400 bg-blue-50/50'
+                              : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              selectedActs.KPK
+                                ? 'border-blue-500 bg-blue-500'
+                                : 'border-gray-300 bg-white'
+                            }`}>
+                              {selectedActs.KPK && (
+                                <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="text-left flex-1 min-w-0">
+                              <div className="font-semibold text-sm text-gray-800">KPK</div>
+                              <div className="text-xs text-gray-500 truncate">Postępowanie Karne</div>
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* KPA */}
+                        <button
+                          onClick={() => setSelectedActs(prev => ({ ...prev, KPA: !prev.KPA }))}
+                          className={`px-4 py-2.5 rounded-lg border transition-all ${
+                            selectedActs.KPA
+                              ? 'border-blue-400 bg-blue-50/50'
+                              : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              selectedActs.KPA
+                                ? 'border-blue-500 bg-blue-500'
+                                : 'border-gray-300 bg-white'
+                            }`}>
+                              {selectedActs.KPA && (
+                                <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="text-left flex-1 min-w-0">
+                              <div className="font-semibold text-sm text-gray-800">KPA</div>
+                              <div className="text-xs text-gray-500 truncate">Postępowanie Administracyjne</div>
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* KPC */}
+                        <button
+                          onClick={() => setSelectedActs(prev => ({ ...prev, KPC: !prev.KPC }))}
+                          className={`px-4 py-2.5 rounded-lg border transition-all ${
+                            selectedActs.KPC
+                              ? 'border-blue-400 bg-blue-50/50'
+                              : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              selectedActs.KPC
+                                ? 'border-blue-500 bg-blue-500'
+                                : 'border-gray-300 bg-white'
+                            }`}>
+                              {selectedActs.KPC && (
+                                <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="text-left flex-1 min-w-0">
+                              <div className="font-semibold text-sm text-gray-800">KPC</div>
+                              <div className="text-xs text-gray-500 truncate">Postępowanie Cywilne</div>
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* KPE */}
+                        <button
+                          onClick={() => setSelectedActs(prev => ({ ...prev, KPE: !prev.KPE }))}
+                          className={`px-4 py-2.5 rounded-lg border transition-all ${
+                            selectedActs.KPE
+                              ? 'border-blue-400 bg-blue-50/50'
+                              : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              selectedActs.KPE
+                                ? 'border-blue-500 bg-blue-500'
+                                : 'border-gray-300 bg-white'
+                            }`}>
+                              {selectedActs.KPE && (
+                                <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="text-left flex-1 min-w-0">
+                              <div className="font-semibold text-sm text-gray-800">KPE</div>
+                              <div className="text-xs text-gray-500 truncate">Postępowanie Egzekucyjne</div>
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* SUS */}
+                        <button
+                          onClick={() => setSelectedActs(prev => ({ ...prev, SUS: !prev.SUS }))}
+                          className={`px-4 py-2.5 rounded-lg border transition-all ${
+                            selectedActs.SUS
+                              ? 'border-blue-400 bg-blue-50/50'
+                              : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${
+                              selectedActs.SUS
+                                ? 'border-blue-500 bg-blue-500'
+                                : 'border-gray-300 bg-white'
+                            }`}>
+                              {selectedActs.SUS && (
+                                <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="text-left flex-1 min-w-0">
+                              <div className="font-semibold text-sm text-gray-800">SUS</div>
+                              <div className="text-xs text-gray-500 truncate">System Ubezpieczeń Społ.</div>
+                            </div>
+                          </div>
+                        </button>
+
+                        {/* KK - Wkrótce */}
+                        <button
+                          disabled
+                          className="px-4 py-2.5 rounded-lg border border-gray-200 bg-gray-50/50 opacity-50 cursor-not-allowed"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-4 h-4 rounded border border-gray-300 bg-white flex-shrink-0"></div>
+                            <div className="text-left flex-1 min-w-0">
+                              <div className="font-semibold text-sm text-gray-500">KK</div>
+                              <div className="text-xs text-gray-400 truncate">Kodeks Karny • Wkrótce</div>
+                            </div>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Input w centrum ekranu */}
@@ -986,73 +1408,177 @@ const ChatInterface: React.FC = () => {
                       }`}
                     >
                       {/* Treść wiadomości z markdown */}
-                      <div className="markdown-content">
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                              // Nagłówki (bez zmian)
-                              h1: ({node, ...props}) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
-                              h2: ({node, ...props}) => <h2 className="text-lg font-bold mt-3 mb-2" {...props} />,
-                              h3: ({node, ...props}) => <h3 className="text-base font-bold mt-2 mb-1" {...props} />,
+                      {message.type === 'user' ? (
+                        <div className="markdown-content">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                                // Nagłówki (bez zmian)
+                                h1: ({node, ...props}) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
+                                h2: ({node, ...props}) => <h2 className="text-lg font-bold mt-3 mb-2" {...props} />,
+                                h3: ({node, ...props}) => <h3 className="text-base font-bold mt-2 mb-1" {...props} />,
 
-                              // --- POPRAWKA LISTOWANIA ---
-                              // 1. Zmieniamy 'list-inside' na 'list-outside'
-                              // 2. Dodajemy 'ml-5' (margines lewy), żeby kropki/cyfry nie wyjechały poza ekran
-                              // 3. 'space-y-1' zapewnia ładny odstęp między punktami
-                              ul: ({node, ...props}) => <ul className="list-disc list-outside ml-5 my-2 space-y-1" {...props} />,
-                              ol: ({node, ...props}) => <ol className="list-decimal list-outside ml-5 my-2 space-y-1" {...props} />,
+                                // --- POPRAWKA LISTOWANIA ---
+                                ul: ({node, ...props}) => <ul className="list-disc list-outside ml-5 my-2 space-y-1" {...props} />,
+                                ol: ({node, ...props}) => <ol className="list-decimal list-outside ml-5 my-2 space-y-1" {...props} />,
 
-                              // Opcjonalnie mały padding dla elementu listy
-                              li: ({node, ...props}) => <li className="pl-1" {...props} />,
-                              // ---------------------------
+                                li: ({node, ...props}) => <li className="pl-1" {...props} />,
 
-                              // Pogrubienie i kursywa (bez zmian)
-                              strong: ({node, ...props}) => <strong className="font-bold" {...props} />,
-                              em: ({node, ...props}) => <em className="italic" {...props} />,
+                                // Pogrubienie i kursywa (bez zmian)
+                                strong: ({node, ...props}) => <strong className="font-bold" {...props} />,
+                                em: ({node, ...props}) => <em className="italic" {...props} />,
 
-                              // UNIWERSALNE PARSOWANIE PRZYPISÓW (bez zmian)
-                              text: ({value}: any) => {
-                                // ... (Twój kod parsowania przypisów zostaje bez zmian) ...
-                                if (typeof value !== 'string') return value;
-                                const parts = [];
-                                const regex = /\[(\d+)\]/g;
-                                let lastIndex = 0;
-                                let match;
-                                while ((match = regex.exec(value)) !== null) {
-                                  if (match.index > lastIndex) {
-                                    parts.push(value.slice(lastIndex, match.index));
+                                // UNIWERSALNE PARSOWANIE PRZYPISÓW (bez zmian)
+                                text: ({value}: any) => {
+                                  if (typeof value !== 'string') return value;
+                                  const parts = [];
+                                  const regex = /\[(\d+)\]/g;
+                                  let lastIndex = 0;
+                                  let match;
+                                  while ((match = regex.exec(value)) !== null) {
+                                    if (match.index > lastIndex) {
+                                      parts.push(value.slice(lastIndex, match.index));
+                                    }
+                                    parts.push(
+                                      <sup key={`fn-${match.index}`} className="text-red-600 font-semibold mx-0.5">
+                                        [{match[1]}]
+                                      </sup>
+                                    );
+                                    lastIndex = regex.lastIndex;
                                   }
-                                  parts.push(
-                                    <sup key={`fn-${match.index}`} className="text-red-600 font-semibold mx-0.5">
-                                      [{match[1]}]
-                                    </sup>
-                                  );
-                                  lastIndex = regex.lastIndex;
-                                }
-                                if (lastIndex < value.length) {
-                                  parts.push(value.slice(lastIndex));
-                                }
-                                return parts.length > 1 ? <>{parts}</> : value;
-                              },
+                                  if (lastIndex < value.length) {
+                                    parts.push(value.slice(lastIndex));
+                                  }
+                                  return parts.length > 1 ? <>{parts}</> : value;
+                                },
 
-                              // Akapity
-                              // WAŻNE: Dodajemy klasę [&:not(:first-child)]:mt-2 zamiast zwykłego my-2,
-                              // aby uniknąć dziwnych odstępów wewnątrz list
-                              p: ({node, ...props}: any) => <p className="my-2 leading-relaxed" {...props} />,
+                                // Akapity
+                                p: ({node, ...props}: any) => <p className="my-2 leading-relaxed" {...props} />,
 
-                              // Kod (bez zmian)
-                              code: ({node, inline, ...props}: any) =>
-                                inline
-                                  ? <code className="bg-gray-100 px-1 py-0.5 rounded text-sm" {...props} />
-                                  : <code className="block bg-gray-100 p-2 rounded my-2 text-sm" {...props} />,
-                          }}
-                        >
-                          {message.content}
-                        </ReactMarkdown>
-                      </div>
+                                // Kod (bez zmian)
+                                code: ({node, inline, ...props}: any) =>
+                                  inline
+                                    ? <code className="bg-gray-100 px-1 py-0.5 rounded text-sm" {...props} />
+                                    : <code className="block bg-gray-100 p-2 rounded my-2 text-sm" {...props} />,
+                            }}
+                          >
+                            {message.content}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        // Wiadomość asystenta - nowa struktura z zakładkami
+                        <>
+                          {(() => {
+                            const { justification, summary } = parseAssistantResponse(message.content);
+                            return (
+                              <>
+                                {/* Szybka odpowiedź */}
+                                {summary && (
+                                  <div className="markdown-content">
+                                    <h3 className="text-sm font-semibold text-gray-700 mb-2">Szybka odpowiedź:</h3>
+                                    <ReactMarkdown
+                                      remarkPlugins={[remarkGfm]}
+                                      components={{
+                                          h1: ({node, ...props}) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
+                                          h2: ({node, ...props}) => <h2 className="text-lg font-bold mt-3 mb-2" {...props} />,
+                                          h3: ({node, ...props}) => <h3 className="text-base font-bold mt-2 mb-1" {...props} />,
+                                          ul: ({node, ...props}) => <ul className="list-disc list-outside ml-5 my-2 space-y-1" {...props} />,
+                                          ol: ({node, ...props}) => <ol className="list-decimal list-outside ml-5 my-2 space-y-1" {...props} />,
+                                          li: ({node, ...props}) => <li className="pl-1" {...props} />,
+                                          strong: ({node, ...props}) => <strong className="font-bold" {...props} />,
+                                          em: ({node, ...props}) => <em className="italic" {...props} />,
+                                          text: ({value}: any) => {
+                                            if (typeof value !== 'string') return value;
+                                            const parts = [];
+                                            const regex = /\[(\d+)\]/g;
+                                            let lastIndex = 0;
+                                            let match;
+                                            while ((match = regex.exec(value)) !== null) {
+                                              if (match.index > lastIndex) {
+                                                parts.push(value.slice(lastIndex, match.index));
+                                              }
+                                              parts.push(
+                                                <sup key={`fn-${match.index}`} className="text-red-600 font-semibold mx-0.5">
+                                                  [{match[1]}]
+                                                </sup>
+                                              );
+                                              lastIndex = regex.lastIndex;
+                                            }
+                                            if (lastIndex < value.length) {
+                                              parts.push(value.slice(lastIndex));
+                                            }
+                                            return parts.length > 1 ? <>{parts}</> : value;
+                                          },
+                                          p: ({node, ...props}: any) => <p className="my-2 leading-relaxed" {...props} />,
+                                          code: ({node, inline, ...props}: any) =>
+                                            inline
+                                              ? <code className="bg-gray-100 px-1 py-0.5 rounded text-sm" {...props} />
+                                              : <code className="block bg-gray-100 p-2 rounded my-2 text-sm" {...props} />,
+                                      }}
+                                    >
+                                      {summary}
+                                    </ReactMarkdown>
+                                  </div>
+                                )}
 
-                      {/* Źródła jako klikalne linki w stopce */}
+                                {/* Uzasadnienie - zakładka rozwijana */}
+                                {justification && (
+                                  <CollapsibleSection title="Uzasadnienie">
+                                    <div className="markdown-content">
+                                      <ReactMarkdown
+                                        remarkPlugins={[remarkGfm]}
+                                        components={{
+                                            h1: ({node, ...props}) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
+                                            h2: ({node, ...props}) => <h2 className="text-lg font-bold mt-3 mb-2" {...props} />,
+                                            h3: ({node, ...props}) => <h3 className="text-base font-bold mt-2 mb-1" {...props} />,
+                                            ul: ({node, ...props}) => <ul className="list-disc list-outside ml-5 my-2 space-y-1" {...props} />,
+                                            ol: ({node, ...props}) => <ol className="list-decimal list-outside ml-5 my-2 space-y-1" {...props} />,
+                                            li: ({node, ...props}) => <li className="pl-1" {...props} />,
+                                            strong: ({node, ...props}) => <strong className="font-bold" {...props} />,
+                                            em: ({node, ...props}) => <em className="italic" {...props} />,
+                                            text: ({value}: any) => {
+                                              if (typeof value !== 'string') return value;
+                                              const parts = [];
+                                              const regex = /\[(\d+)\]/g;
+                                              let lastIndex = 0;
+                                              let match;
+                                              while ((match = regex.exec(value)) !== null) {
+                                                if (match.index > lastIndex) {
+                                                  parts.push(value.slice(lastIndex, match.index));
+                                                }
+                                                parts.push(
+                                                  <sup key={`fn-${match.index}`} className="text-red-600 font-semibold mx-0.5">
+                                                    [{match[1]}]
+                                                  </sup>
+                                                );
+                                                lastIndex = regex.lastIndex;
+                                              }
+                                              if (lastIndex < value.length) {
+                                                parts.push(value.slice(lastIndex));
+                                              }
+                                              return parts.length > 1 ? <>{parts}</> : value;
+                                            },
+                                            p: ({node, ...props}: any) => <p className="my-2 leading-relaxed" {...props} />,
+                                            code: ({node, inline, ...props}: any) =>
+                                              inline
+                                                ? <code className="bg-gray-100 px-1 py-0.5 rounded text-sm" {...props} />
+                                                : <code className="block bg-gray-100 p-2 rounded my-2 text-sm" {...props} />,
+                                        }}
+                                      >
+                                        {justification}
+                                      </ReactMarkdown>
+                                    </div>
+                                  </CollapsibleSection>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </>
+                      )}
+
+                      {/* Źródła jako klikalne linki w stopce - teraz jako zakładka rozwijana dla asystenta */}
                       {message.sources && message.sources.length > 0 && (
+                        message.type === 'user' ? (
                           <div className="mt-4 pt-3 border-t border-gray-300">
                             <p className="text-xs font-medium text-gray-600 mb-2">Przypisy:</p>
                             <div className="space-y-1">
@@ -1064,25 +1590,18 @@ const ChatInterface: React.FC = () => {
                                     className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1.5 rounded transition-colors cursor-pointer"
                                   >
                                     <div className="flex items-start gap-1.5">
-                                      {/* Numer przypisu */}
                                       <span className="font-medium text-blue-900 shrink-0">[{idx + 1}]</span>
-
-                                      {/* Typ */}
                                       <span className="font-medium shrink-0">({source.type || '?'})</span>
-
-                                      {/* Nazwa aktu */}
                                       {source.act && (
                                         <span className="font-medium shrink-0">{source.act}</span>
                                       )}
-
-                                      {/* Numer artykułu */}
                                       {source.article && (
                                         <span className="font-medium shrink-0">Art. {source.article}</span>
                                       )}
-
+                                      {source.paragraph && (
+                                        <span className="font-medium shrink-0">§ {source.paragraph}</span>
+                                      )}
                                       <span className="shrink-0">-</span>
-
-                                      {/* Treść */}
                                       <span className="text-gray-600 flex-1 min-w-0 line-clamp-2 sm:line-clamp-2 md:line-clamp-1">
                                         {source.content}
                                       </span>
@@ -1092,6 +1611,39 @@ const ChatInterface: React.FC = () => {
                               })}
                             </div>
                           </div>
+                        ) : (
+                          <CollapsibleSection title="Podstawy prawne">
+                            <div className="space-y-1">
+                              {message.sources.map((source, idx) => {
+                                return (
+                                  <button
+                                    key={`${source.id}-${idx}`}
+                                    onClick={() => setSelectedSource(source)}
+                                    className="block w-full text-left text-xs text-gray-700 hover:text-blue-900 hover:bg-gray-50 px-2 py-1.5 rounded transition-colors cursor-pointer"
+                                  >
+                                    <div className="flex items-start gap-1.5">
+                                      <span className="font-medium text-blue-900 shrink-0">[{idx + 1}]</span>
+                                      <span className="font-medium shrink-0">({source.type || '?'})</span>
+                                      {source.act && (
+                                        <span className="font-medium shrink-0">{source.act}</span>
+                                      )}
+                                      {source.article && (
+                                        <span className="font-medium shrink-0">Art. {source.article}</span>
+                                      )}
+                                      {source.paragraph && (
+                                        <span className="font-medium shrink-0">§ {source.paragraph}</span>
+                                      )}
+                                      <span className="shrink-0">-</span>
+                                      <span className="text-gray-600 flex-1 min-w-0 line-clamp-2 sm:line-clamp-2 md:line-clamp-1">
+                                        {source.content}
+                                      </span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </CollapsibleSection>
+                        )
                       )}
 
                       <div
@@ -1137,7 +1689,7 @@ const ChatInterface: React.FC = () => {
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Zadaj pytanie o KPA..."
+                  placeholder="Kontynuuj rozmowę..."
                   className="flex-1 px-4 py-3 bg-transparent border-0 outline-none resize-none max-h-[200px] min-h-[52px] text-gray-900 placeholder:text-gray-400"
                   rows={1}
                   disabled={isLoading}
